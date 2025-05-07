@@ -16,8 +16,15 @@ if ! grep -q -E "Debian|Ubuntu" /etc/os-release; then
     exit 1
 fi
 
-# 安装必要的依赖，`dra`
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/devmatteini/dra/refs/heads/main/install.sh | bash -s -- --to /usr/local/bin
+edit_config() {
+    # 此函数需要用户输入以下配置项：
+    read -r -p "请输入域名: " domain
+    read -r -p "请输入KCP协议的混淆密码: " kcp_seed
+    read -r -p "请输入静态页面文件路径: " www_root
+    read -r -p "请输入邮箱地址(用于SSL证书申请,可选): " email
+    # 如果email为空，使用默认值
+    email=${email:-admin@$domain}
+}
 
 # 主菜单函数
 show_menu() {
@@ -36,7 +43,10 @@ show_menu() {
     case $choice in
         1)
             echo "正在准备安装服务..."
-            # 此处将来会调用安装服务的函数
+            # 收集用户输入的配置项
+            edit_config
+            # 执行安装服务脚本 install.sh
+            bash install.sh "$domain" "$kcp_seed" "$www_root" "$email"
             ;;
         2)
             # 执行修改配置的函数
@@ -62,12 +72,3 @@ show_menu() {
 
 # 显示主菜单
 show_menu
-
-edit_config() {
-    # 此函数需要用户输入以下配置项：
-    read -r -p "请输入域名 [${DOMAIN}]: " domain
-    read -r -p "请输入KCP协议的混淆密码 [${KCP_SEED}]: " kcp_seed
-    read -r -p "请输入静态页面文件路径 [${WWW_ROOT}]: " www_root
-}
-
-edit_config
