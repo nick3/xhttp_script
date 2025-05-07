@@ -91,9 +91,9 @@
         "kcpSettings": {
           "uplinkCapacity": 100,
           "downlinkCapacity": 100,
-          "congestion": true,
-          "readBufferSize": 5,
-          "writeBufferSize": 5,
+          "congestion": false,
+          "readBufferSize": 2,
+          "writeBufferSize": 2,
           "seed": "${KCP_SEED}"
         }
       },

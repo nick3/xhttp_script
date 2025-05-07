@@ -1,0 +1,116 @@
+[
+  {
+    "tag": "reality-vision",
+    "protocol": "vless",
+    "settings": {
+      "vnext": [
+        {
+          "address": "${DOMAIN}",
+          "port": 443,
+          "users": [
+            {
+              "id": "${UUID}",
+              "email": "${EMAIL}",
+              "security": "auto",
+              "encryption": "none",
+              "flow": "xtls-rprx-vision"
+            }
+          ]
+        }
+      ]
+    },
+    "streamSettings": {
+      "network": "tcp",
+      "security": "reality",
+      "realitySettings": {
+        "serverName": "${DOMAIN}",
+        "fingerprint": "chrome",
+        "show": false,
+        "publicKey": "${PUBLIC_KEY}",
+        "shortId": "",
+        "spiderX": ""
+      }
+    },
+    "mux": {
+      "enabled": false,
+      "concurrency": -1
+    }
+  },
+  {
+    "tag": "xhttp-reality",
+    "protocol": "vless",
+    "settings": {
+      "vnext": [
+        {
+          "address": "${DOMAIN}",
+          "port": 443,
+          "users": [
+            {
+              "id": "${UUID}",
+              "email": "${EMAIL}",
+              "security": "auto",
+              "encryption": "none"
+            }
+          ]
+        }
+      ]
+    },
+    "streamSettings": {
+      "network": "xhttp",
+      "security": "reality",
+      "xhttpSettings": {
+        "path": "/speedtest",
+        "host": "${DOMAIN}",
+        "mode": "auto"
+      },
+      "realitySettings": {
+        "serverName": "${DOMAIN}",
+        "fingerprint": "chrome",
+        "show": false,
+        "publicKey": "${PUBLIC_KEY}",
+        "shortId": "",
+        "spiderX": ""
+      }
+    },
+    "mux": {
+      "enabled": false,
+      "concurrency": -1
+    }
+  },
+  {
+    "tag": "kcp",
+    "protocol": "vless",
+    "settings": {
+      "vnext": [
+        {
+          "address": "${DOMAIN}",
+          "port": 2052,
+          "users": [
+            {
+              "id": "${UUID}",
+              "email": "${EMAIL}",
+              "security": "auto",
+              "encryption": "none"
+            }
+          ]
+        }
+      ]
+    },
+    "streamSettings": {
+      "network": "kcp",
+      "kcpSettings": {
+        "mtu": 1350,
+        "tti": 50,
+        "uplinkCapacity": 30,
+        "downlinkCapacity": 100,
+        "congestion": false,
+        "readBufferSize": 2,
+        "writeBufferSize": 2,
+        "header": {
+          "type": "none"
+        },
+        "seed": "${KCP_SEED}"
+      }
+    }
+  }
+]
