@@ -1,6 +1,6 @@
 # Xray-Caddy 自动部署脚本
 
-这是一个用于在Linux系统上自动部署和管理 Xray-core 与 Caddy 服务的脚本工具。本工具通过友好的界面帮助用户快速搭建代理服务器，支持多种协议(Reality-vison, xhttp-reality, kcp)。
+这是一个用于在Linux系统上自动部署和管理 Xray-core 与 Caddy 服务的脚本工具。本工具通过友好的界面帮助用户快速搭建代理服务器，支持多种协议(Reality-vision, xhttp-reality, kcp)。
 
 ## 功能特性
 
