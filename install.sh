@@ -60,7 +60,7 @@ fi
 
 log_info "开始下载并配置 Xray-core 和 Caddy ..."
 log_info "域名 (Domain): $DOMAIN"
-log_info "KCP 混淆种子 (KCP Seed): $KCP_SEED" # Be careful logging sensitive info
+# 不在日志中显示敏感信息如KCP种子
 log_info "网站根目录 (WWW Root): $WWW_ROOT"
 
 # --- Prepare Directories ---
@@ -137,7 +137,7 @@ if [ -z "$UUID" ]; then
     log_error "生成 Xray UUID 失败。"
     exit 1
 fi
-log_info "生成的 UUID: $UUID"
+log_info "UUID 生成完成（将在安装完成后显示）"
 
 # --- 5. Generate Private/Public Keys for Xray ---
 log_info "正在生成 Xray X25519 密钥对..."
@@ -150,8 +150,7 @@ if [ -z "$PRIVATE_KEY" ] || [ -z "$PUBLIC_KEY" ]; then
     log_error "命令输出: $KEY_OUTPUT"
     exit 1
 fi
-log_info "生成的 Private Key: $PRIVATE_KEY"
-log_info "生成的 Public Key: $PUBLIC_KEY (此公钥通常用于客户端配置)"
+log_info "X25519 密钥对生成完成（公钥将在安装完成后显示）"
 
 # --- 6. Configure Xray-core ---
 log_info "正在配置 Xray-core (config.json)..."
@@ -171,7 +170,7 @@ ESCAPED_KCP_SEED=$(echo "$KCP_SEED" | sed 's/[&/\\$*^]/\\&/g')
 # Email already escaped as ESCAPED_EMAIL
 # UUID and Keys are base64-like, typically safe for sed.
 
-log_info "使用以下参数生成Xray配置: DOMAIN=$DOMAIN, UUID=$UUID, EMAIL=$EMAIL, KCP_SEED=$KCP_SEED"
+log_info "使用以下参数生成Xray配置: DOMAIN=$DOMAIN, EMAIL=$EMAIL (其他参数为敏感信息，不在日志中显示)"
 
 # 使用 # 作为 sed 分隔符以避免路径和特殊字符引起的问题
 sed "s#\${DOMAIN}#$ESCAPED_DOMAIN#g" "$XRAY_CONFIG_TEMPLATE_PATH" | \
@@ -207,7 +206,7 @@ log_info "  域名 (Address/Host):               $DOMAIN"
 log_info "  用户 ID (UUID for VLESS/VMess):    $UUID"
 log_info "  Xray 公钥 (PublicKey for Reality): $PUBLIC_KEY"
 log_info "  KCP 混淆密码 (Seed for mKCP):      $KCP_SEED"
-log_info "  (Xray 私钥位于服务器配置中，请勿泄露: $PRIVATE_KEY)"
+log_info "  (Xray 私钥已保存在服务器配置中，客户端无需使用)"
 log_info ""
 log_info "服务配置文件位置:"
 log_info "  Caddy: $CADDY_CONFIG_OUTPUT_PATH"
@@ -217,4 +216,19 @@ log_info "请使用以下命令启动服务:"
 log_info "  bash service.sh start"
 log_info "---------------------------------------------------------------------"
 
+# 将客户端配置参数保存到单独的文件中，供后续查看
+CLIENT_CONFIG_INFO_FILE="./app/client_config_info.txt"
+log_info "正在保存客户端配置信息到 $CLIENT_CONFIG_INFO_FILE..."
+cat > "$CLIENT_CONFIG_INFO_FILE" << EOF
+=======================================
+客户端连接配置参数
+=======================================
+域名 (Address/Host): $DOMAIN
+用户 ID (UUID): $UUID
+Xray 公钥 (PublicKey): $PUBLIC_KEY
+KCP 混淆密码 (Seed): $KCP_SEED
+邮箱: $EMAIL
+=======================================
+
+chmod 600 "$CLIENT_CONFIG_INFO_FILE"  # 设置适当的文件权限，因为包含敏感信息
 exit 0

@@ -42,8 +42,44 @@ edit_config() {
     read -r -p "请输入KCP协议的混淆密码: " kcp_seed
     read -r -p "请输入静态页面文件路径: " www_root
     read -r -p "请输入邮箱地址(用于SSL证书申请,可选): " email
+
+    # 验证输入的安全性
+    validate_domain "$domain"
+    validate_path "$www_root"
+
     # 如果email为空，使用默认值
     email=${email:-admin@$domain}
+}
+
+# 验证域名格式
+validate_domain() {
+    local domain="$1"
+    if [[ ! $domain =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}$ ]]; then
+        echo "错误: 无效的域名格式: $domain"
+        read -r -p "按回车键继续..."
+        return 1
+    fi
+}
+
+# 验证路径安全，防止路径遍历
+validate_path() {
+    local path="$1"
+    if [[ $path == *".."* ]] || [[ $path == *"/../"* ]]; then
+        echo "错误: 路径中包含不安全的 '..' 组件: $path"
+        read -r -p "按回车键继续..."
+        return 1
+    fi
+    # 规范化路径并验证
+    local normalized_path=$(realpath -m -- "$path" 2>/dev/null) || {
+        echo "错误: 无法规范化路径: $path"
+        read -r -p "按回车键继续..."
+        return 1
+    }
+    if [[ ! "$normalized_path" =~ ^/ ]]; then
+        echo "错误: 路径必须是绝对路径或以正常方式解析: $path"
+        read -r -p "按回车键继续..."
+        return 1
+    fi
 }
 
 # 主菜单函数
@@ -57,20 +93,33 @@ show_menu() {
     echo "3. 重启服务"
     echo "4. 停止服务"
     echo "5. 显示客户端连接配置"
-    echo "6. 设为开机自启服务"
-    echo "7. 卸载本服务"
-    echo "8. 退出脚本"
+    echo "6. 查看客户端配置参数"
+    echo "7. 设为开机自启服务"
+    echo "8. 查看服务状态"
+    echo "9. 卸载本服务"
+    echo "10. 退出脚本"
     echo "----------------------------------------"
-    read -r -p "请输入选项 [1-8]: " choice
+    read -r -p "请输入选项 [1-10]: " choice
 
     case $choice in
         1)
             echo "正在准备安装服务..."
             # 收集用户输入的配置项
             edit_config
+
+            # 对用户输入进行验证
+            if [ -z "$domain" ] || ! validate_domain "$domain"; then
+                echo "错误: 域名验证失败。"
+                return 1
+            fi
+            if [ -z "$www_root" ] || ! validate_path "$www_root"; then
+                echo "错误: 路径验证失败。"
+                return 1
+            fi
+
             # 执行安装服务脚本 install.sh
             bash install.sh "$domain" "$kcp_seed" "$www_root" "$email"
-            
+
             # 询问是否立即启动服务
             read -r -p "安装已完成，是否立即启动服务? [Y/n]: " start_service
             start_service=${start_service:-Y}
@@ -84,22 +133,32 @@ show_menu() {
         2)
             # 收集用户输入的配置项
             edit_config
-            
+
             # 检查配置信息文件是否存在
             if [ ! -f "./app/config_info.txt" ]; then
                 echo "错误: 无法找到配置信息文件，请先安装服务。"
                 return
             fi
-            
+
             # 从配置文件中读取现有配置
             source "./app/config_info.txt"
-            
+
             # 如果用户没有输入某个配置项，则使用配置文件中的值
             domain=${domain:-$DOMAIN}
             kcp_seed=${kcp_seed:-$KCP_SEED}
             www_root=${www_root:-$WWW_ROOT}
             email=${email:-$EMAIL}
-            
+
+            # 对使用配置文件中的值进行验证
+            if [ -z "$domain" ] || ! validate_domain "$domain"; then
+                echo "错误: 域名验证失败。"
+                return 1
+            fi
+            if [ -z "$www_root" ] || ! validate_path "$www_root"; then
+                echo "错误: 路径验证失败。"
+                return 1
+            fi
+
             # 询问用户是否要更新配置
             read -r -p "确认更新配置并重启服务？ [Y/n]: " confirm
             confirm=${confirm:-Y}
@@ -164,18 +223,34 @@ show_menu() {
             fi
             ;;
         6)
+            echo "正在查看客户端配置参数..."
+            # 检查客户端配置信息文件是否存在
+            if [ ! -f "./app/client_config_info.txt" ]; then
+                echo "错误: 无法找到客户端配置信息文件，请先安装服务。"
+                read -r -p "按回车键继续..."
+                return
+            fi
+
+            # 显示客户端配置信息
+            echo "客户端配置参数如下:"
+            echo "----------------------------------------"
+            cat ./app/client_config_info.txt
+            echo "----------------------------------------"
+            read -r -p "按回车键继续..."
+            ;;
+        7)
             echo "正在准备设为开机自启服务..."
-            
+
             # 确保systemd可用
             if ! command -v systemctl &> /dev/null; then
                 echo "错误：systemd不可用，无法设置开机自启。"
                 read -r -p "按回车键继续..."
                 return
             fi
-            
+
             # 检查当前工作目录，获取绝对路径
             CURRENT_DIR=$(pwd)
-            
+
             # 创建caddy.service文件
             cat > /etc/systemd/system/caddy.service << EOF
 [Unit]
@@ -223,18 +298,18 @@ EOF
 
             # 重新加载systemd配置
             systemctl daemon-reload
-            
+
             # 启用服务开机自启
             systemctl enable caddy.service
             systemctl enable xray.service
-            
+
             # 确认系统服务已创建并启动
             echo "系统服务已创建完成。"
             echo "Caddy 服务状态："
             systemctl status caddy.service --no-pager || true
             echo "Xray 服务状态："
             systemctl status xray.service --no-pager || true
-            
+
             echo "服务已设置为开机自启，并已启动。"
             echo "你可以使用以下命令管理服务："
             echo "  启动服务: systemctl start caddy.service xray.service"
@@ -243,14 +318,20 @@ EOF
             echo "  查看状态: systemctl status caddy.service xray.service"
             read -r -p "按回车键继续..."
             ;;
-        7)
+        8)
+            echo "正在查看服务状态..."
+            # 调用service.sh脚本查看服务状态
+            bash service.sh status
+            read -r -p "按回车键继续..."
+            ;;
+        9)
             echo "正在准备卸载服务..."
             read -r -p "警告: 这将停止所有服务并删除所有配置文件。确定要继续吗? [y/N]: " confirm
             confirm=${confirm:-N}
             if [[ $confirm =~ ^[Yy]$ ]]; then
                 # 先停止服务
                 bash service.sh stop
-                
+
                 # 检查并删除systemd服务（如果存在）
                 if command -v systemctl &> /dev/null; then
                     # 检查服务是否存在
@@ -259,18 +340,18 @@ EOF
                         systemctl disable caddy.service
                         rm -f /etc/systemd/system/caddy.service
                     fi
-                    
+
                     if systemctl list-unit-files | grep -q "xray.service"; then
                         echo "正在禁用并删除Xray系统服务..."
                         systemctl disable xray.service
                         rm -f /etc/systemd/system/xray.service
                     fi
-                    
+
                     # 重新加载systemd配置
                     systemctl daemon-reload
                     echo "系统服务已成功移除。"
                 fi
-                
+
                 # 删除配置文件和程序
                 echo "删除程序文件和配置..."
                 rm -rf ./app/caddy ./app/xray
@@ -279,12 +360,12 @@ EOF
                 echo "操作已取消。"
             fi
             ;;
-        8)
+        10)
             echo "正在退出脚本..."
             exit 0
             ;;
         *)
-            echo "无效输入，请输入 1 到 8 之间的数字。"
+            echo "无效输入，请输入 1 到 10 之间的数字。"
             show_menu # 重新显示菜单
             ;;
     esac

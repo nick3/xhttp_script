@@ -25,8 +25,10 @@ start_services() {
     CADDY_LOG_FILE="/var/log/caddy.log"
     log_info "正在启动 Caddy 服务... 日志将输出到 $CADDY_LOG_FILE"
     # Create log file and set permissions if it doesn't exist, or ensure it's writable
+    # Use root ownership and 640 permissions for better security (readable only by root and group)
     touch "$CADDY_LOG_FILE"
-    chmod 644 "$CADDY_LOG_FILE" # Or appropriate permissions
+    chown root:adm "$CADDY_LOG_FILE" 2>/dev/null || true  # Set owner to root:adm if possible
+    chmod 640 "$CADDY_LOG_FILE"  # More secure permissions - only root can read, group can read, others have no access
 
     nohup ./app/caddy/caddy run --config "$CADDY_CONFIG_PATH" >> "$CADDY_LOG_FILE" 2>&1 &
     CADDY_PID=$!
@@ -46,7 +48,8 @@ start_services() {
     XRAY_LOG_FILE="/var/log/xray.log"
     log_info "正在启动 Xray-core 服务... 日志将输出到 $XRAY_LOG_FILE"
     touch "$XRAY_LOG_FILE"
-    chmod 644 "$XRAY_LOG_FILE"
+    chown root:adm "$XRAY_LOG_FILE" 2>/dev/null || true  # Set owner to root:adm if possible
+    chmod 640 "$XRAY_LOG_FILE"  # More secure permissions
 
     nohup "$XRAY_EXE" run -c "$XRAY_CONFIG_PATH" >> "$XRAY_LOG_FILE" 2>&1 &
     XRAY_PID=$!
@@ -148,46 +151,75 @@ restart_services() {
 # --- Function to Check Services Status ---
 check_status() {
     log_info "正在检查服务状态..."
-    
+
     # 检查Caddy状态
+    CADDY_STATUS="未运行"
+    CADDY_PID=""
     if [ -f ./app/caddy/caddy.pid ]; then
         CADDY_PID=$(cat ./app/caddy/caddy.pid)
-        if ps -p $CADDY_PID > /dev/null; then
+        if ps -p "$CADDY_PID" > /dev/null 2>&1; then
+            CADDY_STATUS="运行中"
             log_info "Caddy 服务正在运行 (PID: $CADDY_PID)。"
         else
-            log_warning "Caddy 服务未运行 (PID文件存在: $CADDY_PID)。"
+            log_warning "Caddy 服务未运行 (PID文件存在但进程不存在: $CADDY_PID)。"
         fi
     else
-        CADDY_PID=$(ps aux | grep "[c]addy run" | awk '{print $2}')
+        # 尝试通过进程查找
+        CADDY_PID=$(pgrep -f "[c]addy run" || true)
         if [ -n "$CADDY_PID" ]; then
             log_info "Caddy 服务正在运行 (PID: $CADDY_PID)，但无PID文件。"
+            CADDY_STATUS="运行中"
         else
             log_warning "Caddy 服务未运行。"
         fi
     fi
-    
+
     # 检查Xray状态
+    XRAY_STATUS="未运行"
+    XRAY_PID=""
     if [ -f ./app/xray/xray.pid ]; then
         XRAY_PID=$(cat ./app/xray/xray.pid)
-        if ps -p $XRAY_PID > /dev/null; then
+        if ps -p "$XRAY_PID" > /dev/null 2>&1; then
+            XRAY_STATUS="运行中"
             log_info "Xray-core 服务正在运行 (PID: $XRAY_PID)。"
         else
-            log_warning "Xray-core 服务未运行 (PID文件存在: $XRAY_PID)。"
+            log_warning "Xray-core 服务未运行 (PID文件存在但进程不存在: $XRAY_PID)。"
         fi
     else
-        XRAY_PID=$(ps aux | grep "[x]ray run" | awk '{print $2}')
+        # 尝试通过进程查找
+        XRAY_PID=$(pgrep -f "[x]ray run" || true)
         if [ -n "$XRAY_PID" ]; then
             log_info "Xray-core 服务正在运行 (PID: $XRAY_PID)，但无PID文件。"
+            XRAY_STATUS="运行中"
         else
             log_warning "Xray-core 服务未运行。"
         fi
     fi
-    
+
+    # 显示汇总信息
+    log_info ""
+    log_info "服务汇总:"
+    log_info "  Caddy: $CADDY_STATUS"
+    log_info "  Xray:  $XRAY_STATUS"
+
     # 显示日志文件位置
     log_info ""
     log_info "服务日志位置:"
     log_info "  Caddy: /var/log/caddy.log"
     log_info "  Xray:  /var/log/xray.log"
+
+    # 显示最近的日志条目（如果服务正在运行）
+    if [ "$CADDY_STATUS" = "运行中" ]; then
+        log_info ""
+        log_info "Caddy 最近日志 (最后5行):"
+        tail -n 5 /var/log/caddy.log 2>/dev/null || echo "  (无法读取日志文件)"
+    fi
+
+    if [ "$XRAY_STATUS" = "运行中" ]; then
+        log_info ""
+        log_info "Xray 最近日志 (最后5行):"
+        tail -n 5 /var/log/xray.log 2>/dev/null || echo "  (无法读取日志文件)"
+    fi
 }
 
 # --- Main script logic ---
