@@ -67,7 +67,7 @@ create_backup() {
 list_backups() {
     local backup_dir="./backups"
     
-    if [ ! -d "$backup_dir" ] || [ -z "$(ls -A "$backup_dir" 2>/dev/null)" ]; then
+    if [ ! -d "$backup_dir" ] || [ -z "$(find "$backup_dir" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
         log_info "没有找到备份文件。"
         return 0
     fi
@@ -149,10 +149,10 @@ update_component() {
             read -r -p "更新失败，是否恢复到备份版本？ [Y/n]: " restore_confirm
             restore_confirm=${restore_confirm:-Y}
             if [[ $restore_confirm =~ ^[Yy]$ ]]; then
-                # 查找最新的备份文件
+                # 查找最新的备份文件 using a safer method
                 backup_dir="./backups"
-                latest_backup=$(ls -t "$backup_dir"/${component}_* 2>/dev/null | head -n 1)
-                if [ -n "$latest_backup" ]; then
+                latest_backup=$(find "$backup_dir" -name "${component}_*" -type f -printf '%T@ %p\n' 2>/dev/null | sort -n -r | head -n 1 | cut -d' ' -f2-)
+                if [ -n "$latest_backup" ] && [ -f "$latest_backup" ]; then
                     restore_backup "$component" "$latest_backup"
                 else
                     log_error "找不到 $component 的备份文件。"
@@ -173,33 +173,33 @@ update_component() {
 # --- Interactive Restore Menu ---
 interactive_restore() {
     local backup_dir="./backups"
-    
-    if [ ! -d "$backup_dir" ] || [ -z "$(ls -A "$backup_dir" 2>/dev/null)" ]; then
+
+    if [ ! -d "$backup_dir" ] || [ -z "$(find "$backup_dir" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
         log_info "没有找到备份文件。"
         return 0
     fi
-    
+
     echo "选择要恢复的组件:"
     echo "1. Caddy"
     echo "2. Xray"
     echo "3. 返回"
-    
+
     read -r -p "请输入选项 [1-3]: " choice
-    
+
     case $choice in
         1)
-            # 列出 Caddy 备份
-            caddy_backups=($(ls "$backup_dir"/caddy_* 2>/dev/null))
+            # 列出 Caddy 备份 using mapfile to avoid issues with filenames containing spaces
+            mapfile -t caddy_backups < <(find "$backup_dir" -name "caddy_*" -type f -print 2>/dev/null | sort)
             if [ ${#caddy_backups[@]} -eq 0 ]; then
                 log_info "没有找到 Caddy 备份文件。"
                 return 0
             fi
-            
+
             echo "可用的 Caddy 备份:"
             for i in "${!caddy_backups[@]}"; do
                 echo "$((i+1)). $(basename "${caddy_backups[i]}")"
             done
-            
+
             read -r -p "请选择要恢复的备份 [1-${#caddy_backups[@]}]: " backup_choice
             if [[ $backup_choice =~ ^[0-9]+$ ]] && [ $backup_choice -ge 1 ] && [ $backup_choice -le ${#caddy_backups[@]} ]; then
                 selected_backup="${caddy_backups[$((backup_choice-1))]}"
@@ -213,18 +213,18 @@ interactive_restore() {
             fi
             ;;
         2)
-            # 列出 Xray 备份
-            xray_backups=($(ls "$backup_dir"/xray_* 2>/dev/null))
+            # 列出 Xray 备份 using mapfile to avoid issues with filenames containing spaces
+            mapfile -t xray_backups < <(find "$backup_dir" -name "xray_*" -type f -print 2>/dev/null | sort)
             if [ ${#xray_backups[@]} -eq 0 ]; then
                 log_info "没有找到 Xray 备份文件。"
                 return 0
             fi
-            
+
             echo "可用的 Xray 备份:"
             for i in "${!xray_backups[@]}"; do
                 echo "$((i+1)). $(basename "${xray_backups[i]}")"
             done
-            
+
             read -r -p "请选择要恢复的备份 [1-${#xray_backups[@]}]: " backup_choice
             if [[ $backup_choice =~ ^[0-9]+$ ]] && [ $backup_choice -ge 1 ] && [ $backup_choice -le ${#xray_backups[@]} ]; then
                 selected_backup="${xray_backups[$((backup_choice-1))]}"
