@@ -135,7 +135,10 @@ update_component() {
     
     # 停止服务
     log_info "停止服务以进行更新..."
-    bash service.sh stop || log_warning "停止服务时出现警告，继续更新..."
+    if ! bash service.sh stop; then
+        log_error "停止服务失败，更新已取消。"
+        return 1
+    fi
     
     # 下载最新版本
     log_info "下载最新版本的 $component..."
@@ -151,7 +154,7 @@ update_component() {
             if [[ $restore_confirm =~ ^[Yy]$ ]]; then
                 # 查找最新的备份文件 using a safer method
                 backup_dir="./backups"
-                latest_backup=$(find "$backup_dir" -name "${component}_*" -type f -printf '%T@ %p\n' 2>/dev/null | sort -n -r | head -n 1 | cut -d' ' -f2-)
+                latest_backup=$(find "$backup_dir" -name "${component}_*" -type f -printf '%T@ %p\0' 2>/dev/null | sort -z -n -r | head -z -n 1 | awk -v RS='\0' '{sub(/^[^ ]+ /, ""); print}')
                 if [ -n "$latest_backup" ] && [ -f "$latest_backup" ]; then
                     restore_backup "$component" "$latest_backup"
                 else
@@ -206,7 +209,10 @@ interactive_restore() {
                 read -r -p "确认恢复 Caddy 到 $(basename "$selected_backup")？ [Y/n]: " confirm
                 confirm=${confirm:-Y}
                 if [[ $confirm =~ ^[Yy]$ ]]; then
-                    bash service.sh stop
+                    if ! bash service.sh stop; then
+                        log_error "停止服务失败，恢复操作已中止。"
+                        return 1
+                    fi
                     restore_backup "caddy" "$selected_backup"
                     bash service.sh start
                 fi
@@ -231,7 +237,10 @@ interactive_restore() {
                 read -r -p "确认恢复 Xray 到 $(basename "$selected_backup")？ [Y/n]: " confirm
                 confirm=${confirm:-Y}
                 if [[ $confirm =~ ^[Yy]$ ]]; then
-                    bash service.sh stop
+                    if ! bash service.sh stop; then
+                        log_error "停止服务失败，恢复操作已中止。"
+                        return 1
+                    fi
                     restore_backup "xray" "$selected_backup"
                     bash service.sh start
                 fi
@@ -277,7 +286,10 @@ case "${1:-help}" in
             # 命令行方式恢复
             component="$2"
             backup_file="$3"
-            bash service.sh stop
+            if ! bash service.sh stop; then
+                log_error "停止服务失败，恢复操作已中止。"
+                exit 1
+            fi
             restore_backup "$component" "$backup_file"
             bash service.sh start
         else
