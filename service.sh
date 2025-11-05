@@ -20,15 +20,20 @@ log_warning() {
 
 # --- Function to Start Services ---
 start_services() {
+    # 获取当前脚本所在目录的绝对路径
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
     # --- Start Caddy Service ---
-    CADDY_CONFIG_PATH="./app/caddy/caddy.json"
+    CADDY_CONFIG_PATH="$SCRIPT_DIR/app/caddy/caddy.json"
     CADDY_LOG_FILE="/var/log/caddy.log"
     log_info "正在启动 Caddy 服务... 日志将输出到 $CADDY_LOG_FILE"
     # Create log file and set permissions if it doesn't exist, or ensure it's writable
+    # Use root ownership and 640 permissions for better security (readable only by root and group)
     touch "$CADDY_LOG_FILE"
-    chmod 644 "$CADDY_LOG_FILE" # Or appropriate permissions
+    chown root:adm "$CADDY_LOG_FILE" 2>/dev/null || true  # Set owner to root:adm if possible
+    chmod 640 "$CADDY_LOG_FILE"  # More secure permissions - only root can read, group can read, others have no access
 
-    nohup ./app/caddy/caddy run --config "$CADDY_CONFIG_PATH" >> "$CADDY_LOG_FILE" 2>&1 &
+    nohup "$SCRIPT_DIR/app/caddy/caddy" run --config "$CADDY_CONFIG_PATH" >> "$CADDY_LOG_FILE" 2>&1 &
     CADDY_PID=$!
     sleep 3 # Give it a moment to start or fail
 
@@ -41,12 +46,48 @@ start_services() {
     fi
 
     # --- Start Xray-core Service ---
-    XRAY_CONFIG_PATH="./app/xray/config.json"
-    XRAY_EXE="./app/xray/xray"
+    XRAY_CONFIG_PATH="$SCRIPT_DIR/app/xray/config.json"
+    XRAY_EXE="$SCRIPT_DIR/app/xray/xray"
     XRAY_LOG_FILE="/var/log/xray.log"
+
+    # 添加调试语句来检查配置文件是否存在
+    log_info "Xray 配置文件路径: $XRAY_CONFIG_PATH"
+    if [ -f "$XRAY_CONFIG_PATH" ]; then
+        log_info "Xray 配置文件存在，大小: $(stat -c%s "$XRAY_CONFIG_PATH") 字节"
+        # 检查配置文件内容（不显示敏感信息）
+        log_info "Xray 配置文件权限: $(stat -c%a "$XRAY_CONFIG_PATH")"
+    else
+        log_error "Xray 配置文件不存在: $XRAY_CONFIG_PATH"
+        log_error "当前工作目录: $(pwd)"
+        log_error "检查目录结构:"
+        ls -la "$SCRIPT_DIR/app/" 2>&1 || true
+        if [ -d "$SCRIPT_DIR/app/xray" ]; then
+            log_error "Xray 目录内容:"
+            ls -la "$SCRIPT_DIR/app/xray/" 2>&1 || true
+        fi
+        # 尝试查找可能的配置文件
+        log_error "在 $SCRIPT_DIR/app/xray/ 目录中查找可能的配置文件:"
+        find "$SCRIPT_DIR/app/xray/" -type f -name "*.json" 2>&1 || true
+    fi
+
+    # 检查 Xray 可执行文件是否存在
+    log_info "Xray 可执行文件路径: $XRAY_EXE"
+    if [ -f "$XRAY_EXE" ]; then
+        log_info "Xray 可执行文件存在，大小: $(stat -c%s "$XRAY_EXE") 字节"
+        log_info "Xray 可执行文件权限: $(stat -c%a "$XRAY_EXE")"
+    else
+        log_error "Xray 可执行文件不存在: $XRAY_EXE"
+        log_error "Xray 目录内容:"
+        ls -la "$SCRIPT_DIR/app/xray/" 2>&1 || true
+        log_error "无法启动 Xray 服务，缺少可执行文件。"
+        # 即使 Xray 启动失败，也要继续启动 Caddy 服务
+        return 0  # 返回成功代码，继续执行
+    fi
+
     log_info "正在启动 Xray-core 服务... 日志将输出到 $XRAY_LOG_FILE"
     touch "$XRAY_LOG_FILE"
-    chmod 644 "$XRAY_LOG_FILE"
+    chown root:adm "$XRAY_LOG_FILE" 2>/dev/null || true  # Set owner to root:adm if possible
+    chmod 640 "$XRAY_LOG_FILE"  # More secure permissions
 
     nohup "$XRAY_EXE" run -c "$XRAY_CONFIG_PATH" >> "$XRAY_LOG_FILE" 2>&1 &
     XRAY_PID=$!
@@ -75,8 +116,8 @@ start_services() {
     fi
 
     # 将PID保存到文件中，便于后续管理
-    echo "$CADDY_PID" > ./app/caddy/caddy.pid
-    echo "$XRAY_PID" > ./app/xray/xray.pid
+    echo "$CADDY_PID" > "$SCRIPT_DIR/app/caddy/caddy.pid"
+    echo "$XRAY_PID" > "$SCRIPT_DIR/app/xray/xray.pid"
     
     log_info ""
     log_info "服务日志:"
@@ -93,11 +134,14 @@ start_services() {
 
 # --- Function to Stop Services ---
 stop_services() {
+    # 获取当前脚本所在目录的绝对路径
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
     log_info "正在停止 Caddy 和 Xray-core 服务..."
-    
+
     # 尝试从PID文件读取
-    if [ -f ./app/caddy/caddy.pid ]; then
-        CADDY_PID=$(cat ./app/caddy/caddy.pid)
+    if [ -f "$SCRIPT_DIR/app/caddy/caddy.pid" ]; then
+        CADDY_PID=$(cat "$SCRIPT_DIR/app/caddy/caddy.pid")
         if ps -p $CADDY_PID > /dev/null; then
             kill $CADDY_PID
             log_info "已停止 Caddy 服务 (PID: $CADDY_PID)。"
@@ -114,9 +158,9 @@ stop_services() {
             log_warning "未找到运行中的 Caddy 服务。"
         fi
     fi
-    
-    if [ -f ./app/xray/xray.pid ]; then
-        XRAY_PID=$(cat ./app/xray/xray.pid)
+
+    if [ -f "$SCRIPT_DIR/app/xray/xray.pid" ]; then
+        XRAY_PID=$(cat "$SCRIPT_DIR/app/xray/xray.pid")
         if ps -p $XRAY_PID > /dev/null; then
             kill $XRAY_PID
             log_info "已停止 Xray-core 服务 (PID: $XRAY_PID)。"
@@ -133,7 +177,7 @@ stop_services() {
             log_warning "未找到运行中的 Xray-core 服务。"
         fi
     fi
-    
+
     log_info "服务停止操作完成。"
 }
 
@@ -147,47 +191,79 @@ restart_services() {
 
 # --- Function to Check Services Status ---
 check_status() {
+    # 获取当前脚本所在目录的绝对路径
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
     log_info "正在检查服务状态..."
-    
+
     # 检查Caddy状态
-    if [ -f ./app/caddy/caddy.pid ]; then
-        CADDY_PID=$(cat ./app/caddy/caddy.pid)
-        if ps -p $CADDY_PID > /dev/null; then
+    CADDY_STATUS="未运行"
+    CADDY_PID=""
+    if [ -f "$SCRIPT_DIR/app/caddy/caddy.pid" ]; then
+        CADDY_PID=$(cat "$SCRIPT_DIR/app/caddy/caddy.pid")
+        if ps -p "$CADDY_PID" > /dev/null 2>&1; then
+            CADDY_STATUS="运行中"
             log_info "Caddy 服务正在运行 (PID: $CADDY_PID)。"
         else
-            log_warning "Caddy 服务未运行 (PID文件存在: $CADDY_PID)。"
+            log_warning "Caddy 服务未运行 (PID文件存在但进程不存在: $CADDY_PID)。"
         fi
     else
-        CADDY_PID=$(ps aux | grep "[c]addy run" | awk '{print $2}')
+        # 尝试通过进程查找
+        CADDY_PID=$(pgrep -f "[c]addy run" || true)
         if [ -n "$CADDY_PID" ]; then
             log_info "Caddy 服务正在运行 (PID: $CADDY_PID)，但无PID文件。"
+            CADDY_STATUS="运行中"
         else
             log_warning "Caddy 服务未运行。"
         fi
     fi
-    
+
     # 检查Xray状态
-    if [ -f ./app/xray/xray.pid ]; then
-        XRAY_PID=$(cat ./app/xray/xray.pid)
-        if ps -p $XRAY_PID > /dev/null; then
+    XRAY_STATUS="未运行"
+    XRAY_PID=""
+    if [ -f "$SCRIPT_DIR/app/xray/xray.pid" ]; then
+        XRAY_PID=$(cat "$SCRIPT_DIR/app/xray/xray.pid")
+        if ps -p "$XRAY_PID" > /dev/null 2>&1; then
+            XRAY_STATUS="运行中"
             log_info "Xray-core 服务正在运行 (PID: $XRAY_PID)。"
         else
-            log_warning "Xray-core 服务未运行 (PID文件存在: $XRAY_PID)。"
+            log_warning "Xray-core 服务未运行 (PID文件存在但进程不存在: $XRAY_PID)。"
         fi
     else
-        XRAY_PID=$(ps aux | grep "[x]ray run" | awk '{print $2}')
+        # 尝试通过进程查找
+        XRAY_PID=$(pgrep -f "[x]ray run" || true)
         if [ -n "$XRAY_PID" ]; then
             log_info "Xray-core 服务正在运行 (PID: $XRAY_PID)，但无PID文件。"
+            XRAY_STATUS="运行中"
         else
             log_warning "Xray-core 服务未运行。"
         fi
     fi
-    
+
+    # 显示汇总信息
+    log_info ""
+    log_info "服务汇总:"
+    log_info "  Caddy: $CADDY_STATUS"
+    log_info "  Xray:  $XRAY_STATUS"
+
     # 显示日志文件位置
     log_info ""
     log_info "服务日志位置:"
     log_info "  Caddy: /var/log/caddy.log"
     log_info "  Xray:  /var/log/xray.log"
+
+    # 显示最近的日志条目（如果服务正在运行）
+    if [ "$CADDY_STATUS" = "运行中" ]; then
+        log_info ""
+        log_info "Caddy 最近日志 (最后5行):"
+        tail -n 5 /var/log/caddy.log 2>/dev/null || echo "  (无法读取日志文件)"
+    fi
+
+    if [ "$XRAY_STATUS" = "运行中" ]; then
+        log_info ""
+        log_info "Xray 最近日志 (最后5行):"
+        tail -n 5 /var/log/xray.log 2>/dev/null || echo "  (无法读取日志文件)"
+    fi
 }
 
 # --- Main script logic ---

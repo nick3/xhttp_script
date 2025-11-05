@@ -39,7 +39,7 @@ wget -O install_remote.sh https://raw.githubusercontent.com/nick3/xhttp_script/m
 
 2. 赋予脚本执行权限：
    ```bash
-   chmod +x main.sh install.sh service.sh download.sh
+   chmod +x main.sh install.sh service.sh download.sh update.sh
    ```
 
 3. 运行主脚本：
@@ -71,11 +71,20 @@ wget -O install_remote.sh https://raw.githubusercontent.com/nick3/xhttp_script/m
 6. **设为开机自启服务**
    - 配置 systemd 服务，实现开机自启
    
-7. **卸载本服务**
+7. **更新 Xray 和 Caddy 到最新版**
+   - 自动备份当前版本
+   - 下载并更新 Xray 和 Caddy 到最新版本
+   - 更新后自动重启服务
+
+8. **恢复到备份版本**
+   - 查看可用的备份版本
+   - 恢复到之前的版本（如果更新后出现问题）
+
+9. **卸载本服务**
    - 停止服务，删除配置文件和程序
-   
-8. **退出脚本**
-   - 退出管理界面
+
+10. **退出脚本**
+    - 退出管理界面
 
 ## 部署过程
 
@@ -100,19 +109,51 @@ wget -O install_remote.sh https://raw.githubusercontent.com/nick3/xhttp_script/m
 - `install.sh` - 安装脚本，负责下载和配置服务
 - `service.sh` - 服务管理脚本，处理服务的启动、停止和状态检查
 - `download.sh` - 下载工具脚本，自动获取最新版本的 Xray-core 和 Caddy
+- `update.sh` - 更新脚本，处理服务更新和备份恢复功能
 - `cfg_tpl/` - 配置文件模板目录
   - `caddy_config.json` - Caddy 服务器配置模板
   - `xray_config.json` - Xray-core 配置模板
   - `xray_client.config.json` - 客户端配置模板
 - `app/` - 应用程序和配置文件目录
 - `www/` - 默认的网站根目录
+- `backups/` - 备份文件目录（自动创建）
+
+## 更新和备份功能
+
+### 自动更新
+- 脚本支持一键更新 Xray 和 Caddy 到最新版本
+- 更新前会自动创建当前版本的备份
+- 更新过程中如果失败，可以选择自动恢复到备份版本
+- 更新完成后会自动重启服务
+
+### 备份管理
+- 每次更新前自动创建备份，备份文件包含时间戳
+- 支持手动创建备份
+- 可以查看所有可用的备份版本
+- 支持恢复到任意备份版本
+
+### 使用备份功能
+```bash
+# 手动创建备份
+./update.sh backup
+
+# 查看所有备份
+./update.sh list-backups
+
+# 交互式恢复
+./update.sh restore
+
+# 直接恢复指定备份
+./update.sh restore caddy ./backups/caddy_20231225_143000
+```
 
 ## 安全建议
 
-- 定期更新脚本获取最新的安全补丁
+- **定期更新**：使用脚本内置的更新功能定期更新 Xray 和 Caddy 到最新版本，获取最新的安全补丁
 - 使用强密码作为KCP混淆密码
 - 定期更换UUID和密钥
 - 在正式环境使用前先在测试环境验证配置
+- **备份管理**：定期检查备份文件，确保在需要时可以快速恢复
 
 ## 日志文件位置
 

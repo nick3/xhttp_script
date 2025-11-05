@@ -1,2 +1,5 @@
 app
 www
+backups
+.claude
+.spec-workflow
