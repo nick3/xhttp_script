@@ -426,8 +426,20 @@ fi
 # 验证配置文件是否成功生成
 if [ -f "$XRAY_CONFIG_OUTPUT_PATH" ]; then
     log_info "Xray-core 配置文件已生成: $XRAY_CONFIG_OUTPUT_PATH"
-    log_info "配置文件大小: $(stat -c%s "$XRAY_CONFIG_OUTPUT_PATH") 字节"
-    log_info "配置文件权限: $(stat -c%a "$XRAY_CONFIG_OUTPUT_PATH")"
+    # 使用兼容的命令获取文件大小和权限
+    if command -v stat >/dev/null 2>&1; then
+        # Linux 系统
+        if stat --version >/dev/null 2>&1; then
+            log_info "配置文件大小: $(stat -c%s "$XRAY_CONFIG_OUTPUT_PATH") 字节"
+            log_info "配置文件权限: $(stat -c%a "$XRAY_CONFIG_OUTPUT_PATH")"
+        else
+            # macOS 系统
+            log_info "配置文件大小: $(stat -f%z "$XRAY_CONFIG_OUTPUT_PATH") 字节"
+            log_info "配置文件权限: $(stat -f%p "$XRAY_CONFIG_OUTPUT_PATH" | sed 's/...//')"
+        fi
+    else
+        log_info "配置文件存在 (无法获取详细信息)"
+    fi
     # 只输出配置文件的结构信息，不输出敏感内容
     log_info "配置文件行数: $(wc -l < "$XRAY_CONFIG_OUTPUT_PATH")"
 else

@@ -173,9 +173,17 @@ show_menu() {
 
             # 执行安装服务脚本 install.sh
             if [[ "$cert_type" == "existing" ]]; then
-                bash install.sh "$domain" "$kcp_seed" "$www_root" "$cert_type" "$cert_path" "$key_path" "$email"
+                if ! bash install.sh "$domain" "$kcp_seed" "$www_root" "$cert_type" "$cert_path" "$key_path" "$email"; then
+                    log_error "安装过程失败，请检查上述错误信息。"
+                    read -r -p "按回车键继续..."
+                    return 1
+                fi
             else
-                bash install.sh "$domain" "$kcp_seed" "$www_root" "$cert_type" "" "" "$email"
+                if ! bash install.sh "$domain" "$kcp_seed" "$www_root" "$cert_type" "" "" "$email"; then
+                    log_error "安装过程失败，请检查上述错误信息。"
+                    read -r -p "按回车键继续..."
+                    return 1
+                fi
             fi
 
             # 询问是否立即启动服务
