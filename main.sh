@@ -18,6 +18,20 @@ fi
 
 # Check for required commands
 REQUIRED_CMDS=("tar" "unzip" "sed" "awk" "grep" "mkdir" "chmod") # 移除了nohup和ps，因为不再需要启动服务
+
+# Define logging functions
+log_info() {
+    echo "[INFO] $(date '+%Y-%m-%d %H:%M:%S') - $1"
+}
+
+log_error() {
+    echo "[ERROR] $(date '+%Y-%m-%d %H:%M:%S') - $1" >&2
+}
+
+log_warning() {
+    echo "[WARNING] $(date '+%Y-%m-%d %H:%M:%S') - $1" >&2
+}
+
 for cmd in "${REQUIRED_CMDS[@]}"; do
     if ! command -v "$cmd" &> /dev/null; then
         log_error "$cmd 命令未找到。请先安装 $cmd。"
@@ -427,13 +441,13 @@ EOF
             echo "  查看状态: systemctl status caddy.service xray.service"
             read -r -p "按回车键继续..."
             ;;
-        8)
+        10)
             echo "正在查看服务状态..."
             # 调用service.sh脚本查看服务状态
             bash service.sh status
             read -r -p "按回车键继续..."
             ;;
-        9)
+        11)
             echo "正在准备卸载服务..."
             read -r -p "警告: 这将停止所有服务并删除所有配置文件。确定要继续吗? [y/N]: " confirm
             confirm=${confirm:-N}
