@@ -378,15 +378,33 @@ log_info "UUID 生成完成（将在安装完成后显示）"
 
 # --- 5. Generate Private/Public Keys for Xray ---
 log_info "正在生成 Xray X25519 密钥对..."
-KEY_OUTPUT=$("$XRAY_EXE" x25519)
+# 捕获命令执行的完整输出和错误信息
+KEY_OUTPUT=$("$XRAY_EXE" x25519 2>&1)
+KEY_EXIT_CODE=$?
+
+if [ $KEY_EXIT_CODE -ne 0 ]; then
+    log_error "Xray x25519 命令执行失败，退出码: $KEY_EXIT_CODE"
+    log_error "命令输出: $KEY_OUTPUT"
+    log_error "Xray 可执行文件路径: $XRAY_EXE"
+    log_error "检查 Xray 可执行文件是否存在和可执行:"
+    ls -la "$XRAY_EXE" 2>&1 || true
+    exit 1
+fi
+
+log_info "Xray x25519 命令输出: $KEY_OUTPUT"
+
 PRIVATE_KEY=$(echo "$KEY_OUTPUT" | grep "Private key:" | awk '{print $3}')
 PUBLIC_KEY=$(echo "$KEY_OUTPUT" | grep "Public key:" | awk '{print $3}')
 
+# 检查是否成功提取了密钥
 if [ -z "$PRIVATE_KEY" ] || [ -z "$PUBLIC_KEY" ]; then
-    log_error "生成 X25519 密钥对失败。"
+    log_error "无法从命令输出中提取密钥。"
     log_error "命令输出: $KEY_OUTPUT"
+    log_error "尝试直接执行命令以查看详细输出:"
+    "$XRAY_EXE" x25519
     exit 1
 fi
+
 log_info "X25519 密钥对生成完成（公钥将在安装完成后显示）"
 
 # --- 6. Configure Xray-core ---
