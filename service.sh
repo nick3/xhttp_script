@@ -49,6 +49,41 @@ start_services() {
     XRAY_CONFIG_PATH="$SCRIPT_DIR/app/xray/config.json"
     XRAY_EXE="$SCRIPT_DIR/app/xray/xray"
     XRAY_LOG_FILE="/var/log/xray.log"
+
+    # 添加调试语句来检查配置文件是否存在
+    log_info "Xray 配置文件路径: $XRAY_CONFIG_PATH"
+    if [ -f "$XRAY_CONFIG_PATH" ]; then
+        log_info "Xray 配置文件存在，大小: $(stat -c%s "$XRAY_CONFIG_PATH") 字节"
+        # 检查配置文件内容（不显示敏感信息）
+        log_info "Xray 配置文件权限: $(stat -c%a "$XRAY_CONFIG_PATH")"
+    else
+        log_error "Xray 配置文件不存在: $XRAY_CONFIG_PATH"
+        log_error "当前工作目录: $(pwd)"
+        log_error "检查目录结构:"
+        ls -la "$SCRIPT_DIR/app/" 2>&1 || true
+        if [ -d "$SCRIPT_DIR/app/xray" ]; then
+            log_error "Xray 目录内容:"
+            ls -la "$SCRIPT_DIR/app/xray/" 2>&1 || true
+        fi
+        # 尝试查找可能的配置文件
+        log_error "在 $SCRIPT_DIR/app/xray/ 目录中查找可能的配置文件:"
+        find "$SCRIPT_DIR/app/xray/" -type f -name "*.json" 2>&1 || true
+    fi
+
+    # 检查 Xray 可执行文件是否存在
+    log_info "Xray 可执行文件路径: $XRAY_EXE"
+    if [ -f "$XRAY_EXE" ]; then
+        log_info "Xray 可执行文件存在，大小: $(stat -c%s "$XRAY_EXE") 字节"
+        log_info "Xray 可执行文件权限: $(stat -c%a "$XRAY_EXE")"
+    else
+        log_error "Xray 可执行文件不存在: $XRAY_EXE"
+        log_error "Xray 目录内容:"
+        ls -la "$SCRIPT_DIR/app/xray/" 2>&1 || true
+        log_error "无法启动 Xray 服务，缺少可执行文件。"
+        # 即使 Xray 启动失败，也要继续启动 Caddy 服务
+        return 0  # 返回成功代码，继续执行
+    fi
+
     log_info "正在启动 Xray-core 服务... 日志将输出到 $XRAY_LOG_FILE"
     touch "$XRAY_LOG_FILE"
     chown root:adm "$XRAY_LOG_FILE" 2>/dev/null || true  # Set owner to root:adm if possible

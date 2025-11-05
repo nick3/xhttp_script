@@ -400,22 +400,44 @@ if [ ! -f "$XRAY_CONFIG_TEMPLATE_PATH" ]; then
 fi
 
 # Replace placeholders in Xray config
-# Escape special characters for sed if necessary. UUID, keys, domain, KCP_SEED are usually safe.
-# However, KCP_SEED could contain anything.
+# Escape special characters for sed - UUID, PRIVATE_KEY, and other variables might contain special regex characters
 ESCAPED_KCP_SEED=$(echo "$KCP_SEED" | sed 's/[&/\\$*^]/\\&/g')
-# Domain already escaped as ESCAPED_DOMAIN
-# Email already escaped as ESCAPED_EMAIL
-# UUID and Keys are base64-like, typically safe for sed.
+ESCAPED_UUID=$(echo "$UUID" | sed 's/[&/\\$*^]/\\&/g')
+ESCAPED_PRIVATE_KEY=$(echo "$PRIVATE_KEY" | sed 's/[&/\\$*^]/\\&/g')
+ESCAPED_DOMAIN=$(echo "$DOMAIN" | sed 's/[&/\\$*^]/\\&/g')
+ESCAPED_EMAIL=$(echo "$EMAIL" | sed 's/[&/\\$*^]/\\&/g')
 
 log_info "使用以下参数生成Xray配置: DOMAIN=$DOMAIN, EMAIL=$EMAIL (其他参数为敏感信息，不在日志中显示)"
+log_info "Xray 配置模板路径: $XRAY_CONFIG_TEMPLATE_PATH"
+log_info "Xray 配置输出路径: $XRAY_CONFIG_OUTPUT_PATH"
 
 # 使用 # 作为 sed 分隔符以避免路径和特殊字符引起的问题
-sed "s#\${DOMAIN}#$ESCAPED_DOMAIN#g" "$XRAY_CONFIG_TEMPLATE_PATH" | \
-    sed "s#\${UUID}#$UUID#g" | \
-    sed "s#\${PRIVATE_KEY}#$PRIVATE_KEY#g" | \
+# 每个sed命令执行后检查是否成功
+if ! sed "s#\${DOMAIN}#$ESCAPED_DOMAIN#g" "$XRAY_CONFIG_TEMPLATE_PATH" | \
+    sed "s#\${UUID}#$ESCAPED_UUID#g" | \
+    sed "s#\${PRIVATE_KEY}#$ESCAPED_PRIVATE_KEY#g" | \
     sed "s#\${KCP_SEED}#$ESCAPED_KCP_SEED#g" | \
-    sed "s#\${EMAIL}#$ESCAPED_EMAIL#g" > "$XRAY_CONFIG_OUTPUT_PATH"
-log_info "Xray-core 配置文件已生成: $XRAY_CONFIG_OUTPUT_PATH"
+    sed "s#\${EMAIL}#$ESCAPED_EMAIL#g" > "$XRAY_CONFIG_OUTPUT_PATH"; then
+    log_error "sed 命令执行失败，Xray 配置文件生成不成功"
+    log_error "可能的原因是变量中包含特殊字符导致 sed 命令失败"
+    exit 1
+fi
+
+# 验证配置文件是否成功生成
+if [ -f "$XRAY_CONFIG_OUTPUT_PATH" ]; then
+    log_info "Xray-core 配置文件已生成: $XRAY_CONFIG_OUTPUT_PATH"
+    log_info "配置文件大小: $(stat -c%s "$XRAY_CONFIG_OUTPUT_PATH") 字节"
+    log_info "配置文件权限: $(stat -c%a "$XRAY_CONFIG_OUTPUT_PATH")"
+    # 只输出配置文件的结构信息，不输出敏感内容
+    log_info "配置文件行数: $(wc -l < "$XRAY_CONFIG_OUTPUT_PATH")"
+else
+    log_error "Xray 配置文件生成失败: $XRAY_CONFIG_OUTPUT_PATH"
+    log_error "检查模板文件内容:"
+    cat "$XRAY_CONFIG_TEMPLATE_PATH" 2>&1 || true
+    log_error "检查输出目录:"
+    ls -la "./app/xray/" 2>&1 || true
+    exit 1
+fi
 
 # 将配置信息保存到配置文件，便于服务启动脚本和客户端配置生成脚本使用
 CONFIG_INFO_FILE="./app/config_info.txt"
