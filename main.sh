@@ -94,12 +94,14 @@ show_menu() {
     echo "4. 停止服务"
     echo "5. 显示客户端连接配置"
     echo "6. 查看客户端配置参数"
-    echo "7. 设为开机自启服务"
-    echo "8. 查看服务状态"
-    echo "9. 卸载本服务"
-    echo "10. 退出脚本"
+    echo "7. 更新 Xray 和 Caddy 到最新版"
+    echo "8. 恢复到备份版本"
+    echo "9. 设为开机自启服务"
+    echo "10. 查看服务状态"
+    echo "11. 卸载本服务"
+    echo "12. 退出脚本"
     echo "----------------------------------------"
-    read -r -p "请输入选项 [1-10]: " choice
+    read -r -p "请输入选项 [1-12]: " choice
 
     case $choice in
         1)
@@ -239,6 +241,67 @@ show_menu() {
             read -r -p "按回车键继续..."
             ;;
         7)
+            echo "正在准备更新 Xray 和 Caddy 到最新版..."
+
+            # 检查是否已安装服务
+            if [ ! -f "./app/xray/xray" ] && [ ! -f "./app/caddy/caddy" ]; then
+                echo "错误: 未找到已安装的服务，请先安装服务。"
+                read -r -p "按回车键继续..."
+                return
+            fi
+
+            echo "这将更新 Xray 和 Caddy 到最新版本。"
+            echo "更新前会自动创建当前版本的备份。"
+            echo "如果更新过程中出现问题，您可以使用恢复功能回到之前的版本。"
+            echo ""
+
+            read -r -p "确认继续更新？ [Y/n]: " confirm
+            confirm=${confirm:-Y}
+            if [[ $confirm =~ ^[Yy]$ ]]; then
+                echo "正在更新服务..."
+                if bash update.sh update; then
+                    echo "更新完成！"
+                else
+                    echo "更新过程中出现问题，请检查上述错误信息。"
+                fi
+            else
+                echo "更新已取消。"
+            fi
+            read -r -p "按回车键继续..."
+            ;;
+        8)
+            echo "正在准备恢复服务到备份版本..."
+
+            # 检查是否有备份
+            if [ ! -d "./backups" ] || [ -z "$(ls -A "./backups" 2>/dev/null)" ]; then
+                echo "没有找到备份文件。"
+                read -r -p "按回车键继续..."
+                return
+            fi
+
+            echo "可用操作:"
+            echo "1. 查看所有备份"
+            echo "2. 恢复备份"
+            echo "3. 返回主菜单"
+
+            read -r -p "请选择操作 [1-3]: " restore_choice
+            case $restore_choice in
+                1)
+                    bash update.sh list-backups
+                    ;;
+                2)
+                    bash update.sh restore
+                    ;;
+                3)
+                    return
+                    ;;
+                *)
+                    echo "无效选项。"
+                    ;;
+            esac
+            read -r -p "按回车键继续..."
+            ;;
+        9)
             echo "正在准备设为开机自启服务..."
 
             # 确保systemd可用
@@ -360,12 +423,12 @@ EOF
                 echo "操作已取消。"
             fi
             ;;
-        10)
+        12)
             echo "正在退出脚本..."
             exit 0
             ;;
         *)
-            echo "无效输入，请输入 1 到 10 之间的数字。"
+            echo "无效输入，请输入 1 到 12 之间的数字。"
             show_menu # 重新显示菜单
             ;;
     esac
