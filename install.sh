@@ -158,6 +158,16 @@ if [[ "$CERT_TYPE" == "existing" ]]; then
     }
   },
   "apps": {
+    "tls": {
+      "certificates": {
+        "load_files": [
+          {
+            "certificate": "$CERT_PATH",
+            "key": "$KEY_PATH"
+          }
+        ]
+      }
+    },
     "layer4": {
       "servers": {
         "udppy": {
@@ -279,13 +289,6 @@ if [[ "$CERT_TYPE" == "existing" ]]; then
                   "$DOMAIN"
                 ]
               },
-              "certificate_loaders": [
-                {
-                  "loader": "inline",
-                  "cert_file": "$CERT_PATH",
-                  "key_file": "$KEY_PATH"
-                }
-              ],
               "cipher_suites": [
                 "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
                 "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
