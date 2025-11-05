@@ -393,8 +393,11 @@ fi
 
 log_info "Xray x25519 命令输出: $KEY_OUTPUT"
 
-PRIVATE_KEY=$(echo "$KEY_OUTPUT" | grep "Private key:" | awk '{print $3}')
-PUBLIC_KEY=$(echo "$KEY_OUTPUT" | grep "Public key:" | awk '{print $3}')
+# Xray 不同版本的 x25519 命令输出格式可能不同
+# 旧版本格式: "Private key:" 和 "Public key:"
+# 新版本格式: "PrivateKey:" 和 "Password:" (其中 Password 是公钥)
+PRIVATE_KEY=$(echo "$KEY_OUTPUT" | grep -E "(Private key:|PrivateKey:)" | awk '{print $NF}')
+PUBLIC_KEY=$(echo "$KEY_OUTPUT" | grep -E "(Public key:|Password:)" | awk '{print $NF}')
 
 # 检查是否成功提取了密钥
 if [ -z "$PRIVATE_KEY" ] || [ -z "$PUBLIC_KEY" ]; then
