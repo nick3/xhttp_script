@@ -41,14 +41,52 @@ edit_config() {
     read -r -p "请输入域名: " domain
     read -r -p "请输入KCP协议的混淆密码: " kcp_seed
     read -r -p "请输入静态页面文件路径: " www_root
-    read -r -p "请输入邮箱地址(用于SSL证书申请,可选): " email
+
+    # 询问用户证书选项
+    echo "请选择证书申请方式:"
+    echo "1. 使用 ACME 自动申请证书 (推荐)"
+    echo "2. 使用现有证书文件"
+    read -r -p "请输入选项 [1-2] (默认为1): " cert_choice
+    cert_choice=${cert_choice:-1}
+
+    if [[ $cert_choice == "2" ]]; then
+        # 使用现有证书
+        read -r -p "请输入证书文件路径 (.crt/.pem): " cert_file
+        read -r -p "请输入私钥文件路径 (.key): " key_file
+
+        # 验证证书文件是否存在
+        if [[ ! -f "$cert_file" ]]; then
+            echo "错误: 证书文件不存在: $cert_file"
+            read -r -p "按回车键继续..."
+            return 1
+        fi
+        if [[ ! -f "$key_file" ]]; then
+            echo "错误: 私钥文件不存在: $key_file"
+            read -r -p "按回车键继续..."
+            return 1
+        fi
+
+        # 设置证书类型标记
+        cert_type="existing"
+        cert_path="$cert_file"
+        key_path="$key_file"
+        # 对于现有证书，邮箱不是必需的，但仍可以询问
+        read -r -p "请输入邮箱地址(用于其他用途,可选): " email
+    else
+        # 使用 ACME 自动申请证书
+        cert_type="acme"
+        read -r -p "请输入邮箱地址(用于SSL证书申请,必需): " email
+    fi
 
     # 验证输入的安全性
     validate_domain "$domain"
     validate_path "$www_root"
 
-    # 如果email为空，使用默认值
-    email=${email:-admin@$domain}
+    # 如果email为空且使用ACME，则必须提供
+    if [[ $cert_type == "acme" && -z "$email" ]]; then
+        email="admin@$domain"
+        echo "使用默认邮箱: $email"
+    fi
 }
 
 # 验证域名格式
@@ -120,7 +158,11 @@ show_menu() {
             fi
 
             # 执行安装服务脚本 install.sh
-            bash install.sh "$domain" "$kcp_seed" "$www_root" "$email"
+            if [[ "$cert_type" == "existing" ]]; then
+                bash install.sh "$domain" "$kcp_seed" "$www_root" "$cert_type" "$cert_path" "$key_path" "$email"
+            else
+                bash install.sh "$domain" "$kcp_seed" "$www_root" "$cert_type" "" "" "$email"
+            fi
 
             # 询问是否立即启动服务
             read -r -p "安装已完成，是否立即启动服务? [Y/n]: " start_service
@@ -167,7 +209,11 @@ show_menu() {
             if [[ $confirm =~ ^[Yy]$ ]]; then
                 echo "正在更新配置并重启服务..."
                 # 调用安装脚本进行配置更新
-                bash install.sh "$domain" "$kcp_seed" "$www_root" "$email"
+                if [[ "$cert_type" == "existing" ]]; then
+                    bash install.sh "$domain" "$kcp_seed" "$www_root" "$cert_type" "$cert_path" "$key_path" "$email"
+                else
+                    bash install.sh "$domain" "$kcp_seed" "$www_root" "$cert_type" "" "" "$email"
+                fi
                 # 重启服务
                 bash service.sh restart
                 echo "配置已更新，服务已重启。"

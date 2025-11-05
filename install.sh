@@ -10,6 +10,10 @@ set -euo pipefail
 # DOMAIN=$1
 # KCP_SEED=$2
 # WWW_ROOT=$3
+# CERT_TYPE=$4  # "acme" or "existing"
+# CERT_PATH=$5  # Path to certificate file (for existing cert)
+# KEY_PATH=$6   # Path to key file (for existing cert)
+# EMAIL=$7      # Email for ACME (optional if using existing cert)
 
 # --- Helper Functions ---
 log_info() {
@@ -26,16 +30,41 @@ log_warning() {
 
 # --- Sanity Checks & Argument Parsing ---
 if [[ $# -lt 3 ]]; then
-    log_error "使用方法: $0 <domain> <kcp_seed> <www_root_path> [email]"
-    log_error "例如: $0 example.com mysecretpassword /var/www/html user@example.com"
+    log_error "使用方法: $0 <domain> <kcp_seed> <www_root_path> [cert_type] [cert_path] [key_path] [email]"
+    log_error "例如: $0 example.com mysecretpassword /var/www/html acme '' '' user@example.com"
+    log_error "例如: $0 example.com mysecretpassword /var/www/html existing /path/to/cert.pem /path/to/key.key user@example.com"
     exit 1
 fi
 
 DOMAIN="$1"
 KCP_SEED="$2"
 WWW_ROOT="$3"
-# 使用默认邮箱或命令行提供的邮箱
-EMAIL="${4:-admin@$DOMAIN}"
+CERT_TYPE="${4:-acme}"  # 默认使用 ACME
+CERT_PATH="${5:-}"
+KEY_PATH="${6:-}"
+EMAIL="${7:-admin@$DOMAIN}"
+
+# 如果证书类型是 existing，验证证书和密钥文件是否存在
+if [[ "$CERT_TYPE" == "existing" ]]; then
+    if [[ -z "$CERT_PATH" || -z "$KEY_PATH" ]]; then
+        log_error "使用现有证书时，证书文件路径和私钥文件路径是必需的"
+        exit 1
+    fi
+
+    if [[ ! -f "$CERT_PATH" ]]; then
+        log_error "证书文件不存在: $CERT_PATH"
+        exit 1
+    fi
+
+    if [[ ! -f "$KEY_PATH" ]]; then
+        log_error "私钥文件不存在: $KEY_PATH"
+        exit 1
+    fi
+
+    log_info "使用现有证书文件: $CERT_PATH 和 $KEY_PATH"
+else
+    log_info "使用 ACME 自动申请证书"
+fi
 
 if [[ $EUID -ne 0 ]]; then
     log_error "请使用root用户运行此脚本。"
@@ -84,36 +113,241 @@ fi
 
 # --- 2. Configure Caddy ---
 log_info "正在配置 Caddy (caddy.json)..."
-CADDY_CONFIG_TEMPLATE_PATH="./cfg_tpl/caddy_config.json"
 CADDY_CONFIG_OUTPUT_PATH="./app/caddy/caddy.json"
 
-if [ ! -f "$CADDY_CONFIG_TEMPLATE_PATH" ]; then
-    log_error "Caddy 配置文件模板未找到: $CADDY_CONFIG_TEMPLATE_PATH (当前工作目录: $(pwd))"
-    exit 1
+# 根据证书类型选择配置模板
+if [[ "$CERT_TYPE" == "existing" ]]; then
+    log_info "使用现有证书配置: $CERT_PATH 和 $KEY_PATH"
+
+    # 创建使用现有证书的 Caddy 配置
+    cat > "$CADDY_CONFIG_OUTPUT_PATH" << EOF
+{
+  "admin": {
+    "disabled": true,
+    "config": {
+      "persist": false
+    }
+  },
+  "logging": {
+    "logs": {
+      "default": {
+        "writer": {
+          "output": "file",
+          "filename": "/var/log/caddy/error.log"
+        },
+        "encoder": {
+          "format": "console"
+        },
+        "level": "ERROR",
+        "exclude": [
+          "http.log.access.log0"
+        ]
+      },
+      "log0": {
+        "writer": {
+          "output": "file",
+          "filename": "/var/log/caddy/access.log"
+        },
+        "encoder": {
+          "format": "console"
+        },
+        "include": [
+          "http.log.access.log0"
+        ]
+      }
+    }
+  },
+  "apps": {
+    "layer4": {
+      "servers": {
+        "udppy": {
+          "listen": [
+            "udp/:443"
+          ],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "proxy",
+                  "upstreams": [
+                    {
+                      "dial": [
+                        "udp/127.0.0.1:7443"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "http": {
+      "servers": {
+        "srvh1": {
+          "listen": [
+            ":80"
+          ],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "static_response",
+                  "headers": {
+                    "Location": [
+                      "https://{http.request.host}{http.request.uri}"
+                    ]
+                  },
+                  "status_code": 301
+                }
+              ]
+            }
+          ],
+          "protocols": [
+            "h1"
+          ]
+        },
+        "srvh3": {
+          "listen": [
+            "127.0.0.1:7443"
+          ],
+          "listener_wrappers": [
+            {
+              "wrapper": "proxy_protocol",
+              "allow": [
+                "127.0.0.1/32"
+              ]
+            },
+            {
+              "wrapper": "tls"
+            }
+          ],
+          "routes": [
+            {
+              "match": [
+                {
+                  "path": [
+                    "/speedtest/*"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "transport": {
+                    "protocol": "http",
+                    "versions": [
+                      "h2c",
+                      "2"
+                    ]
+                  },
+                  "upstreams": [
+                    {
+                      "dial": "unix/@uds2023.sock"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "handle": [
+                {
+                  "handler": "headers",
+                  "response": {
+                    "set": {
+                      "Alt-Svc": [
+                        "h3=\":443\"; ma=2592000"
+                      ],
+                      "Strict-Transport-Security": [
+                        "max-age=31536000; includeSubDomains; preload"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "handler": "file_server",
+                  "root": "$WWW_ROOT"
+                }
+              ]
+            }
+          ],
+          "tls_connection_policies": [
+            {
+              "match": {
+                "sni": [
+                  "$DOMAIN"
+                ]
+              },
+              "certificate_loaders": [
+                {
+                  "loader": "inline",
+                  "cert_file": "$CERT_PATH",
+                  "key_file": "$KEY_PATH"
+                }
+              ],
+              "cipher_suites": [
+                "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+                "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+                "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256"
+              ],
+              "curves": [
+                "x25519",
+                "secp521r1",
+                "secp384r1",
+                "secp256r1"
+              ],
+              "alpn": [
+                "h3",
+                "h2",
+                "http/1.1"
+              ]
+            }
+          ],
+          "trusted_proxies": {
+            "source": "cloudflare",
+            "interval": "12h",
+            "timeout": "15s"
+          },
+          "logs": {
+            "default_logger_name": "log0"
+          },
+          "protocols": [
+            "h1",
+            "h2",
+            "h3"
+          ]
+        }
+      }
+    }
+  }
+}
+EOF
+else
+    # 使用 ACME 自动申请证书的配置
+    log_info "使用 ACME 自动申请证书配置"
+
+    # 使用原始模板并替换变量
+    CADDY_CONFIG_TEMPLATE_PATH="./cfg_tpl/caddy_config.json"
+    if [ ! -f "$CADDY_CONFIG_TEMPLATE_PATH" ]; then
+        log_error "Caddy 配置文件模板未找到: $CADDY_CONFIG_TEMPLATE_PATH (当前工作目录: $(pwd))"
+        exit 1
+    fi
+
+    # Replace placeholders in Caddy config
+    # Escape $WWW_ROOT for sed if it contains slashes or other special characters
+    ESCAPED_WWW_ROOT=$(echo "$WWW_ROOT" | sed 's/[&/\\$*^]/\\&/g')
+    ESCAPED_DOMAIN=$(echo "$DOMAIN" | sed 's/[&/\\$*^]/\\&/g')
+    ESCAPED_EMAIL=$(echo "$EMAIL" | sed 's/[&/\\$*^]/\\&/g')
+
+    log_info "使用以下参数生成Caddy配置: DOMAIN=$DOMAIN, WWW_ROOT=$WWW_ROOT, EMAIL=$EMAIL"
+
+    # 使用 # 作为 sed 分隔符以避免路径中的 / 符号引起的问题
+    sed "s#\${DOMAIN}#$ESCAPED_DOMAIN#g" "$CADDY_CONFIG_TEMPLATE_PATH" | \
+        sed "s#\${WWW_ROOT}#$ESCAPED_WWW_ROOT#g" | \
+        sed "s#\${EMAIL}#$ESCAPED_EMAIL#g" > "$CADDY_CONFIG_OUTPUT_PATH"
 fi
 
-# Prepare a default index.html if it doesn't exist in the user-specified WWW_ROOT
-DEFAULT_INDEX_HTML="${WWW_ROOT}/index.html"
-if [ ! -f "$DEFAULT_INDEX_HTML" ]; then
-    log_info "在 $DEFAULT_INDEX_HTML 创建一个默认的 index.html..."
-    # Ensure the directory for index.html exists (WWW_ROOT should already be created)
-    mkdir -p "$(dirname "$DEFAULT_INDEX_HTML")"
-    echo "<!DOCTYPE html><html><head><title>Welcome to $DOMAIN</title><style>body{font-family: sans-serif; margin: 2em; text-align: center;}</style></head><body><h1>Success!</h1><p>Your site <strong>$DOMAIN</strong> is working.</p><p><small>This is a default page.</small></p></body></html>" > "$DEFAULT_INDEX_HTML"
-    log_info "默认 index.html 创建成功。"
-fi
-
-# Replace placeholders in Caddy config
-# Escape $WWW_ROOT for sed if it contains slashes or other special characters
-ESCAPED_WWW_ROOT=$(echo "$WWW_ROOT" | sed 's/[&/\\$*^]/\\&/g')
-ESCAPED_DOMAIN=$(echo "$DOMAIN" | sed 's/[&/\\$*^]/\\&/g')
-ESCAPED_EMAIL=$(echo "$EMAIL" | sed 's/[&/\\$*^]/\\&/g')
-
-log_info "使用以下参数生成Caddy配置: DOMAIN=$DOMAIN, WWW_ROOT=$WWW_ROOT, EMAIL=$EMAIL"
-
-# 使用 # 作为 sed 分隔符以避免路径中的 / 符号引起的问题
-sed "s#\${DOMAIN}#$ESCAPED_DOMAIN#g" "$CADDY_CONFIG_TEMPLATE_PATH" | \
-    sed "s#\${WWW_ROOT}#$ESCAPED_WWW_ROOT#g" | \
-    sed "s#\${EMAIL}#$ESCAPED_EMAIL#g" > "$CADDY_CONFIG_OUTPUT_PATH"
 log_info "Caddy 配置文件已生成: $CADDY_CONFIG_OUTPUT_PATH"
 
 # --- 3. Download Xray-core ---
