@@ -92,7 +92,7 @@ edit_config() {
 # 验证域名格式
 validate_domain() {
     local domain="$1"
-    if [[ ! $domain =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}$ ]]; then
+    if [[ ! $domain =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$ ]]; then
         echo "错误: 无效的域名格式: $domain"
         read -r -p "按回车键继续..."
         return 1
