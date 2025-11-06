@@ -20,15 +20,27 @@ log_warning() {
 
 # --- Function to Start Services ---
 start_services() {
+    # Check if services are already installed
+    if [ ! -f "/usr/local/bin/caddy" ] || [ ! -f "/usr/local/bin/xray" ]; then
+        log_error "Xray 或 Caddy 未安装。请先运行安装脚本。"
+        exit 1
+    fi
+
+    # Check if config files exist
+    if [ ! -f "/etc/caddy/caddy.json" ] || [ ! -f "/etc/xray/config.json" ]; then
+        log_error "配置文件不存在。请先运行安装脚本。"
+        exit 1
+    fi
+
     # --- Start Caddy Service ---
-    CADDY_CONFIG_PATH="./app/caddy/caddy.json"
+    CADDY_CONFIG_PATH="/etc/caddy/caddy.json"
     CADDY_LOG_FILE="/var/log/caddy.log"
     log_info "正在启动 Caddy 服务... 日志将输出到 $CADDY_LOG_FILE"
     # Create log file and set permissions if it doesn't exist, or ensure it's writable
     touch "$CADDY_LOG_FILE"
     chmod 644 "$CADDY_LOG_FILE" # Or appropriate permissions
 
-    nohup ./app/caddy/caddy run --config "$CADDY_CONFIG_PATH" >> "$CADDY_LOG_FILE" 2>&1 &
+    nohup /usr/local/bin/caddy run --config "$CADDY_CONFIG_PATH" >> "$CADDY_LOG_FILE" 2>&1 &
     CADDY_PID=$!
     sleep 3 # Give it a moment to start or fail
 
@@ -41,8 +53,8 @@ start_services() {
     fi
 
     # --- Start Xray-core Service ---
-    XRAY_CONFIG_PATH="./app/xray/config.json"
-    XRAY_EXE="./app/xray/xray"
+    XRAY_CONFIG_PATH="/etc/xray/config.json"
+    XRAY_EXE="/usr/local/bin/xray"
     XRAY_LOG_FILE="/var/log/xray.log"
     log_info "正在启动 Xray-core 服务... 日志将输出到 $XRAY_LOG_FILE"
     touch "$XRAY_LOG_FILE"
@@ -75,9 +87,10 @@ start_services() {
     fi
 
     # 将PID保存到文件中，便于后续管理
-    echo "$CADDY_PID" > ./app/caddy/caddy.pid
-    echo "$XRAY_PID" > ./app/xray/xray.pid
-    
+    mkdir -p /var/run/xray-caddy
+    echo "$CADDY_PID" > /var/run/xray-caddy/caddy.pid
+    echo "$XRAY_PID" > /var/run/xray-caddy/xray.pid
+
     log_info ""
     log_info "服务日志:"
     log_info "  Caddy: $CADDY_LOG_FILE"
@@ -94,10 +107,13 @@ start_services() {
 # --- Function to Stop Services ---
 stop_services() {
     log_info "正在停止 Caddy 和 Xray-core 服务..."
-    
+
+    # Ensure run directory exists
+    mkdir -p /var/run/xray-caddy
+
     # 尝试从PID文件读取
-    if [ -f ./app/caddy/caddy.pid ]; then
-        CADDY_PID=$(cat ./app/caddy/caddy.pid)
+    if [ -f /var/run/xray-caddy/caddy.pid ]; then
+        CADDY_PID=$(cat /var/run/xray-caddy/caddy.pid)
         if ps -p $CADDY_PID > /dev/null; then
             kill $CADDY_PID
             log_info "已停止 Caddy 服务 (PID: $CADDY_PID)。"
@@ -114,9 +130,9 @@ stop_services() {
             log_warning "未找到运行中的 Caddy 服务。"
         fi
     fi
-    
-    if [ -f ./app/xray/xray.pid ]; then
-        XRAY_PID=$(cat ./app/xray/xray.pid)
+
+    if [ -f /var/run/xray-caddy/xray.pid ]; then
+        XRAY_PID=$(cat /var/run/xray-caddy/xray.pid)
         if ps -p $XRAY_PID > /dev/null; then
             kill $XRAY_PID
             log_info "已停止 Xray-core 服务 (PID: $XRAY_PID)。"
@@ -133,7 +149,7 @@ stop_services() {
             log_warning "未找到运行中的 Xray-core 服务。"
         fi
     fi
-    
+
     log_info "服务停止操作完成。"
 }
 
@@ -148,10 +164,13 @@ restart_services() {
 # --- Function to Check Services Status ---
 check_status() {
     log_info "正在检查服务状态..."
-    
+
+    # Ensure run directory exists
+    mkdir -p /var/run/xray-caddy
+
     # 检查Caddy状态
-    if [ -f ./app/caddy/caddy.pid ]; then
-        CADDY_PID=$(cat ./app/caddy/caddy.pid)
+    if [ -f /var/run/xray-caddy/caddy.pid ]; then
+        CADDY_PID=$(cat /var/run/xray-caddy/caddy.pid)
         if ps -p $CADDY_PID > /dev/null; then
             log_info "Caddy 服务正在运行 (PID: $CADDY_PID)。"
         else
@@ -165,10 +184,10 @@ check_status() {
             log_warning "Caddy 服务未运行。"
         fi
     fi
-    
+
     # 检查Xray状态
-    if [ -f ./app/xray/xray.pid ]; then
-        XRAY_PID=$(cat ./app/xray/xray.pid)
+    if [ -f /var/run/xray-caddy/xray.pid ]; then
+        XRAY_PID=$(cat /var/run/xray-caddy/xray.pid)
         if ps -p $XRAY_PID > /dev/null; then
             log_info "Xray-core 服务正在运行 (PID: $XRAY_PID)。"
         else
@@ -182,7 +201,7 @@ check_status() {
             log_warning "Xray-core 服务未运行。"
         fi
     fi
-    
+
     # 显示日志文件位置
     log_info ""
     log_info "服务日志位置:"

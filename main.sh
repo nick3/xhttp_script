@@ -84,22 +84,23 @@ show_menu() {
         2)
             # 收集用户输入的配置项
             edit_config
-            
+
             # 检查配置信息文件是否存在
-            if [ ! -f "./app/config_info.txt" ]; then
+            if [ ! -f "/etc/xray/config_info.txt" ]; then
                 echo "错误: 无法找到配置信息文件，请先安装服务。"
+                read -r -p "按回车键继续..."
                 return
             fi
-            
+
             # 从配置文件中读取现有配置
-            source "./app/config_info.txt"
-            
+            source "/etc/xray/config_info.txt"
+
             # 如果用户没有输入某个配置项，则使用配置文件中的值
             domain=${domain:-$DOMAIN}
             kcp_seed=${kcp_seed:-$KCP_SEED}
             www_root=${www_root:-$WWW_ROOT}
             email=${email:-$EMAIL}
-            
+
             # 询问用户是否要更新配置
             read -r -p "确认更新配置并重启服务？ [Y/n]: " confirm
             confirm=${confirm:-Y}
@@ -113,45 +114,51 @@ show_menu() {
             else
                 echo "操作已取消。"
             fi
+            read -r -p "按回车键继续..."
             ;;
         3)
             echo "正在重启服务..."
             # 调用service.sh脚本重启服务
             bash service.sh restart
+            read -r -p "按回车键继续..."
             ;;
         4)
             echo "正在停止服务..."
             # 调用service.sh脚本停止服务
             bash service.sh stop
+            read -r -p "按回车键继续..."
             ;;
         5)
             echo "正在准备生成客户端连接配置..."
             # 检查配置信息文件是否存在
-            if [ ! -f "./app/config_info.txt" ]; then
+            if [ ! -f "/etc/xray/config_info.txt" ]; then
                 echo "错误: 无法找到配置信息文件，请先安装服务。"
                 read -r -p "按回车键继续..."
                 return
             fi
-            
+
             # 读取配置信息
-            source "./app/config_info.txt"
-            
+            source "/etc/xray/config_info.txt"
+
             # 生成客户端配置文件
             echo "正在根据模板生成客户端配置文件..."
-            
+
+            # 获取当前脚本所在目录
+            CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
             # 确保配置文件目录存在
             mkdir -p "./app"
-            
+
             # 从模板生成配置文件，替换所有占位符
-            if [ -f "./cfg_tpl/xray_client.config.json" ]; then
+            if [ -f "$CURRENT_DIR/cfg_tpl/xray_client.config.json" ]; then
                 # 使用sed替换配置文件中的所有变量
                 sed -e "s|\${DOMAIN}|$DOMAIN|g" \
                     -e "s|\${UUID}|$UUID|g" \
                     -e "s|\${EMAIL}|${EMAIL:-admin@$DOMAIN}|g" \
                     -e "s|\${PUBLIC_KEY}|$PUBLIC_KEY|g" \
                     -e "s|\${KCP_SEED}|$KCP_SEED|g" \
-                    ./cfg_tpl/xray_client.config.json > ./app/xray_client_config.json
-                
+                    "$CURRENT_DIR/cfg_tpl/xray_client.config.json" > "./app/xray_client_config.json"
+
                 echo "客户端配置文件已生成: ./app/xray_client_config.json"
                 echo
                 echo "配置文件内容如下:"
@@ -160,22 +167,27 @@ show_menu() {
                 echo "----------------------------------------"
                 echo
             else
-                echo "错误: 找不到客户端配置模板文件 ./cfg_tpl/xray_client.config.json"
+                echo "错误: 找不到客户端配置模板文件 $CURRENT_DIR/cfg_tpl/xray_client.config.json"
             fi
+            read -r -p "按回车键继续..."
             ;;
         6)
             echo "正在准备设为开机自启服务..."
-            
+
             # 确保systemd可用
             if ! command -v systemctl &> /dev/null; then
                 echo "错误：systemd不可用，无法设置开机自启。"
                 read -r -p "按回车键继续..."
                 return
             fi
-            
-            # 检查当前工作目录，获取绝对路径
-            CURRENT_DIR=$(pwd)
-            
+
+            # 检查程序是否存在
+            if [ ! -f "/usr/local/bin/caddy" ] || [ ! -f "/usr/local/bin/xray" ]; then
+                echo "错误：Xray 或 Caddy 未安装，请先安装服务。"
+                read -r -p "按回车键继续..."
+                return
+            fi
+
             # 创建caddy.service文件
             cat > /etc/systemd/system/caddy.service << EOF
 [Unit]
@@ -187,8 +199,7 @@ Wants=network-online.target systemd-networkd-wait-online.service
 Type=simple
 User=root
 Group=root
-WorkingDirectory=$CURRENT_DIR
-ExecStart=$CURRENT_DIR/app/caddy/caddy run --config $CURRENT_DIR/app/caddy/caddy.json
+ExecStart=/usr/local/bin/caddy run --config /etc/caddy/caddy.json
 ExecReload=/bin/kill -USR1 \$MAINPID
 Restart=always
 RestartSec=10s
@@ -208,11 +219,10 @@ After=network.target nss-lookup.target
 [Service]
 User=root
 Group=root
-WorkingDirectory=$CURRENT_DIR
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
-ExecStart=$CURRENT_DIR/app/xray/xray run -c $CURRENT_DIR/app/xray/config.json
+ExecStart=/usr/local/bin/xray run -c /etc/xray/config.json
 Restart=on-failure
 RestartSec=10s
 LimitNOFILE=infinity
@@ -223,18 +233,18 @@ EOF
 
             # 重新加载systemd配置
             systemctl daemon-reload
-            
+
             # 启用服务开机自启
             systemctl enable caddy.service
             systemctl enable xray.service
-            
+
             # 确认系统服务已创建并启动
             echo "系统服务已创建完成。"
             echo "Caddy 服务状态："
             systemctl status caddy.service --no-pager || true
             echo "Xray 服务状态："
             systemctl status xray.service --no-pager || true
-            
+
             echo "服务已设置为开机自启，并已启动。"
             echo "你可以使用以下命令管理服务："
             echo "  启动服务: systemctl start caddy.service xray.service"
@@ -250,34 +260,55 @@ EOF
             if [[ $confirm =~ ^[Yy]$ ]]; then
                 # 先停止服务
                 bash service.sh stop
-                
+
                 # 检查并删除systemd服务（如果存在）
                 if command -v systemctl &> /dev/null; then
                     # 检查服务是否存在
                     if systemctl list-unit-files | grep -q "caddy.service"; then
                         echo "正在禁用并删除Caddy系统服务..."
-                        systemctl disable caddy.service
+                        systemctl disable caddy.service || true
                         rm -f /etc/systemd/system/caddy.service
                     fi
-                    
+
                     if systemctl list-unit-files | grep -q "xray.service"; then
                         echo "正在禁用并删除Xray系统服务..."
-                        systemctl disable xray.service
+                        systemctl disable xray.service || true
                         rm -f /etc/systemd/system/xray.service
                     fi
-                    
+
                     # 重新加载systemd配置
                     systemctl daemon-reload
                     echo "系统服务已成功移除。"
                 fi
-                
-                # 删除配置文件和程序
-                echo "删除程序文件和配置..."
-                rm -rf ./app/caddy ./app/xray
-                echo "服务已卸载。"
+
+                # 删除程序文件
+                echo "删除程序文件..."
+                rm -f /usr/local/bin/xray
+                rm -f /usr/local/bin/caddy
+
+                # 删除配置文件
+                echo "删除配置文件..."
+                rm -rf /etc/xray
+                rm -rf /etc/caddy
+
+                # 删除日志文件
+                echo "删除日志文件..."
+                rm -f /var/log/xray.log
+                rm -f /var/log/caddy.log
+
+                # 删除PID文件
+                echo "删除PID文件..."
+                rm -rf /var/run/xray-caddy
+
+                # 删除快捷命令
+                echo "删除快捷命令..."
+                rm -f /usr/local/bin/xraycaddy
+
+                echo "服务已完全卸载。"
             else
                 echo "操作已取消。"
             fi
+            read -r -p "按回车键继续..."
             ;;
         8)
             echo "正在退出脚本..."

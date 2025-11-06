@@ -65,15 +65,24 @@ log_info "网站根目录 (WWW Root): $WWW_ROOT"
 
 # --- Prepare Directories ---
 log_info "创建所需目录..."
-mkdir -p ./app/caddy
-mkdir -p ./app/xray
-mkdir -p "$WWW_ROOT"
-# 创建日志目录
+# 创建系统目录
+mkdir -p /usr/local/bin
+mkdir -p /etc/xray
+mkdir -p /etc/caddy
 mkdir -p /var/log/caddy
 mkdir -p /var/log/xray
+mkdir -p "$WWW_ROOT"
+
+# 设置权限
+chmod 755 /usr/local/bin
+chmod 755 /etc/xray
+chmod 755 /etc/caddy
 chmod 755 /var/log/caddy
 chmod 755 /var/log/xray
-log_info "目录 ./app/caddy, ./app/xray, $WWW_ROOT, /var/log/caddy, /var/log/xray 已准备就绪。"
+
+# 创建项目目录（仅用于存放管理脚本和临时文件）
+mkdir -p ./app/temp
+log_info "目录已准备就绪："
 
 # --- 1. Download Caddy ---
 log_info "正在使用 download.sh 下载 Caddy..."
@@ -82,10 +91,23 @@ if ! bash "$DOWNLOAD_SCRIPT" caddy; then
     exit 1
 fi
 
-# --- 2. Configure Caddy ---
+# --- 2. Download Caddy executable to temp ---
+log_info "正在下载 Caddy 到临时目录..."
+if ! bash "$DOWNLOAD_SCRIPT" caddy; then
+    log_error "下载 Caddy 失败，请查看上面的错误信息。"
+    exit 1
+fi
+
+# --- 3. Install Caddy to system ---
+log_info "正在安装 Caddy 到 /usr/local/bin..."
+cp ./app/temp/caddy /usr/local/bin/caddy
+chmod +x /usr/local/bin/caddy
+log_info "Caddy 已安装到 /usr/local/bin/caddy"
+
+# --- 4. Configure Caddy ---
 log_info "正在配置 Caddy (caddy.json)..."
 CADDY_CONFIG_TEMPLATE_PATH="./cfg_tpl/caddy_config.json"
-CADDY_CONFIG_OUTPUT_PATH="./app/caddy/caddy.json"
+CADDY_CONFIG_OUTPUT_PATH="/etc/caddy/caddy.json"
 
 if [ ! -f "$CADDY_CONFIG_TEMPLATE_PATH" ]; then
     log_error "Caddy 配置文件模板未找到: $CADDY_CONFIG_TEMPLATE_PATH (当前工作目录: $(pwd))"
@@ -116,17 +138,30 @@ sed "s#\${DOMAIN}#$ESCAPED_DOMAIN#g" "$CADDY_CONFIG_TEMPLATE_PATH" | \
     sed "s#\${EMAIL}#$ESCAPED_EMAIL#g" > "$CADDY_CONFIG_OUTPUT_PATH"
 log_info "Caddy 配置文件已生成: $CADDY_CONFIG_OUTPUT_PATH"
 
-# --- 3. Download Xray-core ---
-log_info "正在使用 download.sh 下载 Xray-core..."
+# --- 5. Download Xray-core to temp ---
+log_info "正在下载 Xray-core 到临时目录..."
 if ! bash "$DOWNLOAD_SCRIPT" xray; then
     log_error "下载 Xray-core 失败，请查看上面的错误信息。"
     exit 1
 fi
 
 # 确认xray可执行文件存在
-XRAY_EXE="./app/xray/xray"
+TEMP_XRAY="./app/temp/xray"
+if [ ! -f "$TEMP_XRAY" ]; then
+    log_error "Xray 可执行文件未找到: $TEMP_XRAY。请检查下载是否成功。"
+    exit 1
+fi
+
+# --- 6. Install Xray to system ---
+log_info "正在安装 Xray 到 /usr/local/bin..."
+cp "$TEMP_XRAY" /usr/local/bin/xray
+chmod +x /usr/local/bin/xray
+log_info "Xray 已安装到 /usr/local/bin/xray"
+
+# 确认安装成功
+XRAY_EXE="/usr/local/bin/xray"
 if [ ! -f "$XRAY_EXE" ]; then
-    log_error "Xray 可执行文件未找到: $XRAY_EXE。请检查下载是否成功。"
+    log_error "Xray 安装失败: $XRAY_EXE"
     exit 1
 fi
 
@@ -153,10 +188,10 @@ fi
 log_info "生成的 Private Key: $PRIVATE_KEY"
 log_info "生成的 Public Key: $PUBLIC_KEY (此公钥通常用于客户端配置)"
 
-# --- 6. Configure Xray-core ---
+# --- 7. Configure Xray-core ---
 log_info "正在配置 Xray-core (config.json)..."
 XRAY_CONFIG_TEMPLATE_PATH="./cfg_tpl/xray_config.json"
-XRAY_CONFIG_OUTPUT_PATH="./app/xray/config.json"
+XRAY_CONFIG_OUTPUT_PATH="/etc/xray/config.json"
 
 if [ ! -f "$XRAY_CONFIG_TEMPLATE_PATH" ]; then
     log_error "Xray 配置文件模板未找到: $XRAY_CONFIG_TEMPLATE_PATH (当前工作目录: $(pwd))"
@@ -181,10 +216,9 @@ sed "s#\${DOMAIN}#$ESCAPED_DOMAIN#g" "$XRAY_CONFIG_TEMPLATE_PATH" | \
     sed "s#\${EMAIL}#$ESCAPED_EMAIL#g" > "$XRAY_CONFIG_OUTPUT_PATH"
 log_info "Xray-core 配置文件已生成: $XRAY_CONFIG_OUTPUT_PATH"
 
-# 将配置信息保存到配置文件，便于服务启动脚本和客户端配置生成脚本使用
-CONFIG_INFO_FILE="./app/config_info.txt"
-log_info "正在保存配置信息到 $CONFIG_INFO_FILE..."
-cat > "$CONFIG_INFO_FILE" << EOF
+# --- 8. Save Configuration Info ---
+log_info "正在保存配置信息到 /etc/xray/config_info.txt..."
+cat > "/etc/xray/config_info.txt" << EOF
 # Xray & Caddy 配置信息
 DOMAIN=$DOMAIN
 UUID=$UUID
@@ -193,14 +227,30 @@ PUBLIC_KEY=$PUBLIC_KEY
 KCP_SEED=$KCP_SEED
 EMAIL=$EMAIL
 WWW_ROOT=$WWW_ROOT
+XRAY_BIN=/usr/local/bin/xray
+CADDY_BIN=/usr/local/bin/caddy
+XRAY_CONFIG=/etc/xray/config.json
+CADDY_CONFIG=/etc/caddy/caddy.json
 EOF
-chmod 600 "$CONFIG_INFO_FILE"  # 设置适当的文件权限，因为包含敏感信息
-log_info "配置信息已保存到 $CONFIG_INFO_FILE"
+chmod 600 "/etc/xray/config_info.txt"  # 设置适当的文件权限，因为包含敏感信息
+log_info "配置信息已保存到 /etc/xray/config_info.txt"
+
+# --- 9. Create xraycaddy command shortcut ---
+log_info "正在创建 xraycaddy 全局命令..."
+CURRENT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ln -sf "$CURRENT_SCRIPT_DIR/main.sh" /usr/local/bin/xraycaddy
+chmod +x /usr/local/bin/xraycaddy
+log_info "快捷命令 'xraycaddy' 已创建完成"
+
+# --- 10. Cleanup temporary files ---
+log_info "清理临时文件..."
+rm -rf ./app/temp
+log_info "临时文件已清理"
 
 log_info "---------------------------------------------------------------------"
 log_info "安装和配置完成!"
 log_info "---------------------------------------------------------------------"
-log_info "Xray-core 和 Caddy 已下载并配置完成。"
+log_info "Xray-core 和 Caddy 已安装并配置完成。"
 log_info ""
 log_info "重要客户端配置信息 (请妥善保管):"
 log_info "  域名 (Address/Host):               $DOMAIN"
@@ -210,11 +260,14 @@ log_info "  KCP 混淆密码 (Seed for mKCP):      $KCP_SEED"
 log_info "  (Xray 私钥位于服务器配置中，请勿泄露: $PRIVATE_KEY)"
 log_info ""
 log_info "服务配置文件位置:"
-log_info "  Caddy: $CADDY_CONFIG_OUTPUT_PATH"
-log_info "  Xray:  $XRAY_CONFIG_OUTPUT_PATH"
+log_info "  程序:   /usr/local/bin/{xray,caddy}"
+log_info "  Caddy:  $CADDY_CONFIG_OUTPUT_PATH"
+log_info "  Xray:   $XRAY_CONFIG_OUTPUT_PATH"
+log_info "  配置信息: /etc/xray/config_info.txt"
 log_info ""
-log_info "请使用以下命令启动服务:"
-log_info "  bash service.sh start"
+log_info "快捷命令:"
+log_info "  管理服务: xraycaddy"
+log_info "  直接启动: xraycaddy"
 log_info "---------------------------------------------------------------------"
 
 exit 0
