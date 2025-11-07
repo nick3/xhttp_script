@@ -10,6 +10,10 @@ set -euo pipefail
 # DOMAIN=$1
 # KCP_SEED=$2
 # WWW_ROOT=$3
+# CERT_TYPE=$4  # "acme" or "existing"
+# CERT_PATH=$5  # Path to certificate file (for existing cert)
+# KEY_PATH=$6   # Path to key file (for existing cert)
+# EMAIL=$7      # Email for ACME (optional if using existing cert)
 
 # --- Helper Functions ---
 log_info() {
@@ -26,16 +30,41 @@ log_warning() {
 
 # --- Sanity Checks & Argument Parsing ---
 if [[ $# -lt 3 ]]; then
-    log_error "使用方法: $0 <domain> <kcp_seed> <www_root_path> [email]"
-    log_error "例如: $0 example.com mysecretpassword /var/www/html user@example.com"
+    log_error "使用方法: $0 <domain> <kcp_seed> <www_root_path> [cert_type] [cert_path] [key_path] [email]"
+    log_error "例如: $0 example.com mysecretpassword /var/www/html acme '' '' user@example.com"
+    log_error "例如: $0 example.com mysecretpassword /var/www/html existing /path/to/cert.pem /path/to/key.key user@example.com"
     exit 1
 fi
 
 DOMAIN="$1"
 KCP_SEED="$2"
 WWW_ROOT="$3"
-# 使用默认邮箱或命令行提供的邮箱
-EMAIL="${4:-admin@$DOMAIN}"
+CERT_TYPE="${4:-acme}"  # 默认使用 ACME
+CERT_PATH="${5:-}"
+KEY_PATH="${6:-}"
+EMAIL="${7:-admin@$DOMAIN}"
+
+# 如果证书类型是 existing，验证证书和密钥文件是否存在
+if [[ "$CERT_TYPE" == "existing" ]]; then
+    if [[ -z "$CERT_PATH" || -z "$KEY_PATH" ]]; then
+        log_error "使用现有证书时，证书文件路径和私钥文件路径是必需的"
+        exit 1
+    fi
+
+    if [[ ! -f "$CERT_PATH" ]]; then
+        log_error "证书文件不存在: $CERT_PATH"
+        exit 1
+    fi
+
+    if [[ ! -f "$KEY_PATH" ]]; then
+        log_error "私钥文件不存在: $KEY_PATH"
+        exit 1
+    fi
+
+    log_info "使用现有证书文件: $CERT_PATH 和 $KEY_PATH"
+else
+    log_info "使用 ACME 自动申请证书"
+fi
 
 if [[ $EUID -ne 0 ]]; then
     log_error "请使用root用户运行此脚本。"
@@ -99,7 +128,16 @@ log_info "Caddy 已安装到 /usr/local/bin/caddy"
 
 # --- 4. Configure Caddy ---
 log_info "正在配置 Caddy (caddy.json)..."
-CADDY_CONFIG_TEMPLATE_PATH="./cfg_tpl/caddy_config.json"
+
+# 根据证书类型选择配置模板
+if [[ "$CERT_TYPE" == "existing" ]]; then
+    log_info "使用现有证书配置: $CERT_PATH 和 $KEY_PATH"
+    CADDY_CONFIG_TEMPLATE_PATH="./cfg_tpl/caddy_existing_cert_config.json"
+else
+    log_info "使用 ACME 自动申请证书配置"
+    CADDY_CONFIG_TEMPLATE_PATH="./cfg_tpl/caddy_config.json"
+fi
+
 CADDY_CONFIG_OUTPUT_PATH="/etc/caddy/caddy.json"
 
 if [ ! -f "$CADDY_CONFIG_TEMPLATE_PATH" ]; then
@@ -122,13 +160,24 @@ fi
 ESCAPED_WWW_ROOT=$(echo "$WWW_ROOT" | sed 's/[&/\\$*^]/\\&/g')
 ESCAPED_DOMAIN=$(echo "$DOMAIN" | sed 's/[&/\\$*^]/\\&/g')
 ESCAPED_EMAIL=$(echo "$EMAIL" | sed 's/[&/\\$*^]/\\&/g')
+ESCAPED_CERT_PATH=$(echo "$CERT_PATH" | sed 's/[&/\\$*^]/\\&/g')
+ESCAPED_KEY_PATH=$(echo "$KEY_PATH" | sed 's/[&/\\$*^]/\\&/g')
 
 log_info "使用以下参数生成Caddy配置: DOMAIN=$DOMAIN, WWW_ROOT=$WWW_ROOT, EMAIL=$EMAIL"
 
 # 使用 # 作为 sed 分隔符以避免路径中的 / 符号引起的问题
-sed "s#\${DOMAIN}#$ESCAPED_DOMAIN#g" "$CADDY_CONFIG_TEMPLATE_PATH" | \
-    sed "s#\${WWW_ROOT}#$ESCAPED_WWW_ROOT#g" | \
-    sed "s#\${EMAIL}#$ESCAPED_EMAIL#g" > "$CADDY_CONFIG_OUTPUT_PATH"
+if [[ "$CERT_TYPE" == "existing" ]]; then
+    # 使用现有证书的模板，需要替换证书路径
+    sed "s#\${DOMAIN}#$ESCAPED_DOMAIN#g" "$CADDY_CONFIG_TEMPLATE_PATH" | \
+        sed "s#\${WWW_ROOT}#$ESCAPED_WWW_ROOT#g" | \
+        sed "s#\${CERT_PATH}#$ESCAPED_CERT_PATH#g" | \
+        sed "s#\${KEY_PATH}#$ESCAPED_KEY_PATH#g" > "$CADDY_CONFIG_OUTPUT_PATH"
+else
+    # 使用ACME模板
+    sed "s#\${DOMAIN}#$ESCAPED_DOMAIN#g" "$CADDY_CONFIG_TEMPLATE_PATH" | \
+        sed "s#\${WWW_ROOT}#$ESCAPED_WWW_ROOT#g" | \
+        sed "s#\${EMAIL}#$ESCAPED_EMAIL#g" > "$CADDY_CONFIG_OUTPUT_PATH"
+fi
 log_info "Caddy 配置文件已生成: $CADDY_CONFIG_OUTPUT_PATH"
 
 # --- 5. Download Xray-core to temp ---
@@ -240,6 +289,9 @@ PUBLIC_KEY=$PUBLIC_KEY
 KCP_SEED=$KCP_SEED
 EMAIL=$EMAIL
 WWW_ROOT=$WWW_ROOT
+CERT_TYPE=$CERT_TYPE
+CERT_PATH=$CERT_PATH
+KEY_PATH=$KEY_PATH
 XRAY_BIN=/usr/local/bin/xray
 CADDY_BIN=/usr/local/bin/caddy
 XRAY_CONFIG=/etc/xray/config.json
