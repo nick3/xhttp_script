@@ -582,15 +582,17 @@ EOF
 
                 # 检查并删除systemd服务（如果存在）
                 if command -v systemctl &> /dev/null; then
-                    # 检查服务是否存在
+                    # 先停止并禁用服务，然后再删除服务文件
                     if systemctl list-unit-files | grep -q "caddy.service"; then
-                        echo "正在禁用并删除Caddy系统服务..."
+                        echo "正在停止并禁用Caddy系统服务..."
+                        systemctl stop caddy.service || true
                         systemctl disable caddy.service || true
                         rm -f /etc/systemd/system/caddy.service
                     fi
 
                     if systemctl list-unit-files | grep -q "xray.service"; then
-                        echo "正在禁用并删除Xray系统服务..."
+                        echo "正在停止并禁用Xray系统服务..."
+                        systemctl stop xray.service || true
                         systemctl disable xray.service || true
                         rm -f /etc/systemd/system/xray.service
                     fi

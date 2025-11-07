@@ -129,7 +129,7 @@ log_info "目录已准备就绪："
 
 # --- 2. Download Caddy executable to temp ---
 log_info "正在下载 Caddy 到临时目录..."
-if ! bash "$DOWNLOAD_SCRIPT" caddy; then
+if ! bash "$DOWNLOAD_SCRIPT" caddy --dir ./app/temp; then
     log_error "下载 Caddy 失败，请查看上面的错误信息。"
     exit 1
 fi
@@ -182,21 +182,23 @@ log_info "使用以下参数生成Caddy配置: DOMAIN=$DOMAIN, WWW_ROOT=$WWW_ROO
 # 使用 # 作为 sed 分隔符以避免路径中的 / 符号引起的问题
 if [[ "$CERT_TYPE" == "existing" ]]; then
     # 使用现有证书的模板，需要替换证书路径
-    sed "s#\${DOMAIN}#$ESCAPED_DOMAIN#g" "$CADDY_CONFIG_TEMPLATE_PATH" | \
-        sed "s#\${WWW_ROOT}#$ESCAPED_WWW_ROOT#g" | \
-        sed "s#\${CERT_PATH}#$ESCAPED_CERT_PATH#g" | \
-        sed "s#\${KEY_PATH}#$ESCAPED_KEY_PATH#g" > "$CADDY_CONFIG_OUTPUT_PATH"
+    sed -e "s#\${DOMAIN}#$ESCAPED_DOMAIN#g" \
+        -e "s#\${WWW_ROOT}#$ESCAPED_WWW_ROOT#g" \
+        -e "s#\${CERT_PATH}#$ESCAPED_CERT_PATH#g" \
+        -e "s#\${KEY_PATH}#$ESCAPED_KEY_PATH#g" \
+        "$CADDY_CONFIG_TEMPLATE_PATH" > "$CADDY_CONFIG_OUTPUT_PATH"
 else
     # 使用ACME模板
-    sed "s#\${DOMAIN}#$ESCAPED_DOMAIN#g" "$CADDY_CONFIG_TEMPLATE_PATH" | \
-        sed "s#\${WWW_ROOT}#$ESCAPED_WWW_ROOT#g" | \
-        sed "s#\${EMAIL}#$ESCAPED_EMAIL#g" > "$CADDY_CONFIG_OUTPUT_PATH"
+    sed -e "s#\${DOMAIN}#$ESCAPED_DOMAIN#g" \
+        -e "s#\${WWW_ROOT}#$ESCAPED_WWW_ROOT#g" \
+        -e "s#\${EMAIL}#$ESCAPED_EMAIL#g" \
+        "$CADDY_CONFIG_TEMPLATE_PATH" > "$CADDY_CONFIG_OUTPUT_PATH"
 fi
 log_info "Caddy 配置文件已生成: $CADDY_CONFIG_OUTPUT_PATH"
 
 # --- 5. Download Xray-core to temp ---
 log_info "正在下载 Xray-core 到临时目录..."
-if ! bash "$DOWNLOAD_SCRIPT" xray; then
+if ! bash "$DOWNLOAD_SCRIPT" xray --dir ./app/temp; then
     log_error "下载 Xray-core 失败，请查看上面的错误信息。"
     exit 1
 fi
@@ -284,11 +286,12 @@ ESCAPED_KCP_SEED=$(echo "$KCP_SEED" | sed 's/[&/\\$*^]/\\&/g')
 log_info "正在生成Xray配置文件（出于安全考虑不显示敏感参数）"
 
 # 使用 # 作为 sed 分隔符以避免路径和特殊字符引起的问题
-sed "s#\${DOMAIN}#$ESCAPED_DOMAIN#g" "$XRAY_CONFIG_TEMPLATE_PATH" | \
-    sed "s#\${UUID}#$UUID#g" | \
-    sed "s#\${PRIVATE_KEY}#$PRIVATE_KEY#g" | \
-    sed "s#\${KCP_SEED}#$ESCAPED_KCP_SEED#g" | \
-    sed "s#\${EMAIL}#$ESCAPED_EMAIL#g" > "$XRAY_CONFIG_OUTPUT_PATH"
+sed -e "s#\${DOMAIN}#$ESCAPED_DOMAIN#g" \
+    -e "s#\${UUID}#$UUID#g" \
+    -e "s#\${PRIVATE_KEY}#$PRIVATE_KEY#g" \
+    -e "s#\${KCP_SEED}#$ESCAPED_KCP_SEED#g" \
+    -e "s#\${EMAIL}#$ESCAPED_EMAIL#g" \
+    "$XRAY_CONFIG_TEMPLATE_PATH" > "$XRAY_CONFIG_OUTPUT_PATH"
 log_info "Xray-core 配置文件已生成: $XRAY_CONFIG_OUTPUT_PATH"
 
 # --- 8. Save Configuration Info ---
@@ -338,10 +341,7 @@ ln -sf "$CURRENT_SCRIPT_DIR/main.sh" /usr/local/bin/xraycaddy
 chmod +x /usr/local/bin/xraycaddy
 log_info "快捷命令 'xraycaddy' 已创建完成"
 
-# --- 10. Cleanup temporary files ---
-log_info "清理临时文件..."
-rm -rf ./app/temp
-log_info "临时文件已清理"
+# 注意：临时文件清理由 EXIT trap 自动处理（见第 41 行）
 
 log_info "---------------------------------------------------------------------"
 log_info "安装和配置完成!"

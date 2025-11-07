@@ -154,7 +154,7 @@ stop_services() {
         fi
     else
         # 尝试通过进程查找
-        CADDY_PID=$(pgrep -f "[c]addy run" || true)
+        CADDY_PID=$(pgrep -f "caddy run" || true)
         if [ -n "$CADDY_PID" ]; then
             kill $CADDY_PID
             log_info "已停止 Caddy 服务 (PID: $CADDY_PID)。"
@@ -173,7 +173,7 @@ stop_services() {
         fi
     else
         # 尝试通过进程查找
-        XRAY_PID=$(pgrep -f "[x]ray run" || true)
+        XRAY_PID=$(pgrep -f "xray run" || true)
         if [ -n "$XRAY_PID" ]; then
             kill $XRAY_PID
             log_info "已停止 Xray-core 服务 (PID: $XRAY_PID)。"
@@ -213,7 +213,7 @@ check_status() {
         fi
     else
         # 尝试通过进程查找
-        CADDY_PID=$(pgrep -f "[c]addy run" || true)
+        CADDY_PID=$(pgrep -f "caddy run" || true)
         if [ -n "$CADDY_PID" ]; then
             log_info "Caddy 服务正在运行 (PID: $CADDY_PID)，但无PID文件。"
             CADDY_STATUS="运行中"
@@ -235,7 +235,7 @@ check_status() {
         fi
     else
         # 尝试通过进程查找
-        XRAY_PID=$(pgrep -f "[x]ray run" || true)
+        XRAY_PID=$(pgrep -f "xray run" || true)
         if [ -n "$XRAY_PID" ]; then
             log_info "Xray-core 服务正在运行 (PID: $XRAY_PID)，但无PID文件。"
             XRAY_STATUS="运行中"
