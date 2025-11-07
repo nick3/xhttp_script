@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# 获取脚本所在目录
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Exit immediately if a command exits with a non-zero status.
 # Treat unset variables as an error when substituting.
 # Prevent errors in a pipeline from being masked.
@@ -136,11 +139,11 @@ update_component() {
 
     # 停止服务
     log_info "停止服务以进行更新..."
-    bash service.sh stop || log_warning "停止服务时出现警告，继续更新..."
+    bash "$SCRIPT_DIR/service.sh" stop || log_warning "停止服务时出现警告，继续更新..."
 
     # 下载最新版本
     log_info "下载最新版本的 $component..."
-    if bash download.sh --force "$component"; then
+    if bash "$SCRIPT_DIR/download.sh" --force "$component"; then
         log_info "$component 更新成功！"
     else
         log_error "$component 更新失败！"
@@ -165,7 +168,7 @@ update_component() {
 
     # 重启服务
     log_info "重启服务..."
-    bash service.sh start
+    bash "$SCRIPT_DIR/service.sh" start
 
     log_info "$component 更新完成！"
     return 0
@@ -207,9 +210,9 @@ interactive_restore() {
                 read -r -p "确认恢复 Caddy 到 $(basename "$selected_backup")？ [Y/n]: " confirm
                 confirm=${confirm:-Y}
                 if [[ $confirm =~ ^[Yy]$ ]]; then
-                    bash service.sh stop
+                    bash "$SCRIPT_DIR/service.sh" stop
                     restore_backup "caddy" "$selected_backup"
-                    bash service.sh start
+                    bash "$SCRIPT_DIR/service.sh" start
                 fi
             fi
             ;;
@@ -232,9 +235,9 @@ interactive_restore() {
                 read -r -p "确认恢复 Xray 到 $(basename "$selected_backup")？ [Y/n]: " confirm
                 confirm=${confirm:-Y}
                 if [[ $confirm =~ ^[Yy]$ ]]; then
-                    bash service.sh stop
+                    bash "$SCRIPT_DIR/service.sh" stop
                     restore_backup "xray" "$selected_backup"
-                    bash service.sh start
+                    bash "$SCRIPT_DIR/service.sh" start
                 fi
             fi
             ;;
@@ -278,9 +281,9 @@ case "${1:-help}" in
             # 命令行方式恢复
             component="$2"
             backup_file="$3"
-            bash service.sh stop
+            bash "$SCRIPT_DIR/service.sh" stop
             restore_backup "$component" "$backup_file"
-            bash service.sh start
+            bash "$SCRIPT_DIR/service.sh" start
         else
             # 交互式恢复
             interactive_restore

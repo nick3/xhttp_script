@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# 获取脚本所在目录，用于支持xraycaddy快捷命令
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # 检查当前系统是否符合脚本要求，必须为x86_64架构的Linux系统
 if [[ $(uname -m) != "x86_64" ]]; then
     echo "当前系统不支持，请使用x86_64架构的Linux系统。"
@@ -30,6 +33,111 @@ log_error() {
 
 log_warning() {
     echo "[WARNING] $(date '+%Y-%m-%d %H:%M:%S') - $1" >&2
+}
+
+# --- Secure configuration file parser ---
+# This function safely parses the config file without executing arbitrary code
+parse_config_file() {
+    local config_file="/etc/xray/config_info.txt"
+
+    if [ ! -f "$config_file" ]; then
+        log_error "配置文件不存在: $config_file"
+        return 1
+    fi
+
+    if [ ! -r "$config_file" ]; then
+        log_error "配置文件不可读: $config_file"
+        return 1
+    fi
+
+    # Reset global variables
+    DOMAIN=""
+    UUID=""
+    PRIVATE_KEY=""
+    PUBLIC_KEY=""
+    KCP_SEED=""
+    EMAIL=""
+    WWW_ROOT=""
+    CERT_TYPE=""
+    CERT_PATH=""
+    KEY_PATH=""
+    XRAY_BIN=""
+    CADDY_BIN=""
+    XRAY_CONFIG=""
+    CADDY_CONFIG=""
+
+    # Parse file line by line to avoid code injection
+    while IFS= read -r line || [ -n "$line" ]; do
+        # Skip empty lines and comments
+        [[ -z "$line" ]] && continue
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+
+        # Extract key-value pairs safely
+        if [[ "$line" =~ ^([A-Z_]+)=(.*)$ ]]; then
+            local key="${BASH_REMATCH[1]}"
+            local value="${BASH_REMATCH[2]}"
+
+            # Set values based on key, with basic validation
+            case $key in
+                DOMAIN)
+                    if [[ "$value" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+                        DOMAIN="$value"
+                    fi
+                    ;;
+                UUID)
+                    if [[ "$value" =~ ^[a-fA-F0-9-]+$ ]]; then
+                        UUID="$value"
+                    fi
+                    ;;
+                PRIVATE_KEY|PUBLIC_KEY)
+                    # Base64-like validation for keys
+                    if [[ "$value" =~ ^[a-zA-Z0-9/+_=-]+$ ]]; then
+                        case $key in
+                            PRIVATE_KEY) PRIVATE_KEY="$value" ;;
+                            PUBLIC_KEY)  PUBLIC_KEY="$value"  ;;
+                        esac
+                    fi
+                    ;;
+                KCP_SEED)
+                    # KCP 种子可以是任何字符串，因此我们不进行严格验证。
+                    # 在 install.sh 中，它在使用 sed 之前已经进行了转义。
+                    KCP_SEED="$value"
+                    ;;
+                EMAIL)
+                    if [[ "$value" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+                        EMAIL="$value"
+                    fi
+                    ;;
+                WWW_ROOT)
+                    # Path validation (avoid path traversal)
+                    if [[ "$value" =~ ^/ ]] && [[ ! "$value" =~ \.\. ]]; then
+                        WWW_ROOT="$value"
+                    fi
+                    ;;
+                CERT_TYPE)
+                    if [[ "$value" =~ ^(acme|existing)$ ]]; then
+                        CERT_TYPE="$value"
+                    fi
+                    ;;
+                CERT_PATH|KEY_PATH|XRAY_BIN|CADDY_BIN|XRAY_CONFIG|CADDY_CONFIG)
+                    # Path validation for file paths
+                    if [[ "$value" =~ ^/ ]] && [[ ! "$value" =~ \.\. ]]; then
+                        case $key in
+                            CERT_PATH)   CERT_PATH="$value" ;;
+                            KEY_PATH)    KEY_PATH="$value" ;;
+                            XRAY_BIN)    XRAY_BIN="$value" ;;
+                            CADDY_BIN)   CADDY_BIN="$value" ;;
+                            XRAY_CONFIG) XRAY_CONFIG="$value" ;;
+                            CADDY_CONFIG) CADDY_CONFIG="$value" ;;
+                        esac
+                    fi
+                    ;;
+            esac
+        fi
+    done < "$config_file"
+
+    log_info "配置文件解析完成"
+    return 0
 }
 
 for cmd in "${REQUIRED_CMDS[@]}"; do
@@ -149,11 +257,10 @@ show_menu() {
     echo "7. 更新 Xray 和 Caddy 到最新版"
     echo "8. 恢复到备份版本"
     echo "9. 设为开机自启服务"
-    echo "10. 查看服务状态"
-    echo "11. 卸载本服务"
-    echo "12. 退出脚本"
+    echo "10. 卸载本服务"
+    echo "11. 退出脚本"
     echo "----------------------------------------"
-    read -r -p "请输入选项 [1-12]: " choice
+    read -r -p "请输入选项 [1-11]: " choice
 
     case $choice in
         1)
@@ -164,22 +271,24 @@ show_menu() {
             # 对用户输入进行验证
             if [ -z "$domain" ] || ! validate_domain "$domain"; then
                 echo "错误: 域名验证失败。"
+                read -r -p "按回车键继续..."
                 return 1
             fi
             if [ -z "$www_root" ] || ! validate_path "$www_root"; then
                 echo "错误: 路径验证失败。"
+                read -r -p "按回车键继续..."
                 return 1
             fi
 
             # 执行安装服务脚本 install.sh
             if [[ "$cert_type" == "existing" ]]; then
-                if ! bash install.sh "$domain" "$kcp_seed" "$www_root" "$cert_type" "$cert_path" "$key_path" "$email"; then
+                if ! bash "$SCRIPT_DIR/install.sh" "$domain" "$kcp_seed" "$www_root" "$cert_type" "$cert_path" "$key_path" "$email"; then
                     log_error "安装过程失败，请检查上述错误信息。"
                     read -r -p "按回车键继续..."
                     return 1
                 fi
             else
-                if ! bash install.sh "$domain" "$kcp_seed" "$www_root" "$cert_type" "" "" "$email"; then
+                if ! bash "$SCRIPT_DIR/install.sh" "$domain" "$kcp_seed" "$www_root" "$cert_type" "" "" "$email"; then
                     log_error "安装过程失败，请检查上述错误信息。"
                     read -r -p "按回车键继续..."
                     return 1
@@ -191,37 +300,44 @@ show_menu() {
             start_service=${start_service:-Y}
             if [[ $start_service =~ ^[Yy]$ ]]; then
                 echo "正在启动服务..."
-                bash service.sh start
+                bash "$SCRIPT_DIR/service.sh" start
             else
-                echo "服务未启动，您可以稍后使用 'bash service.sh start' 命令启动服务。"
+                echo "服务未启动，您可以稍后使用 'bash "$SCRIPT_DIR/service.sh" start' 命令启动服务。"
             fi
+            read -r -p "按回车键继续..."
             ;;
         2)
             # 收集用户输入的配置项
             edit_config
 
             # 检查配置信息文件是否存在
-            if [ ! -f "./app/config_info.txt" ]; then
+            if [ ! -f "/etc/xray/config_info.txt" ]; then
                 echo "错误: 无法找到配置信息文件，请先安装服务。"
+                read -r -p "按回车键继续..."
                 return
             fi
 
             # 从配置文件中读取现有配置
-            source "./app/config_info.txt"
+            parse_config_file
 
             # 如果用户没有输入某个配置项，则使用配置文件中的值
             domain=${domain:-$DOMAIN}
             kcp_seed=${kcp_seed:-$KCP_SEED}
             www_root=${www_root:-$WWW_ROOT}
             email=${email:-$EMAIL}
+            cert_type=${cert_type:-$CERT_TYPE}
+            cert_path=${cert_path:-$CERT_PATH}
+            key_path=${key_path:-$KEY_PATH}
 
             # 对使用配置文件中的值进行验证
             if [ -z "$domain" ] || ! validate_domain "$domain"; then
                 echo "错误: 域名验证失败。"
+                read -r -p "按回车键继续..."
                 return 1
             fi
             if [ -z "$www_root" ] || ! validate_path "$www_root"; then
                 echo "错误: 路径验证失败。"
+                read -r -p "按回车键继续..."
                 return 1
             fi
 
@@ -232,55 +348,61 @@ show_menu() {
                 echo "正在更新配置并重启服务..."
                 # 调用安装脚本进行配置更新
                 if [[ "$cert_type" == "existing" ]]; then
-                    bash install.sh "$domain" "$kcp_seed" "$www_root" "$cert_type" "$cert_path" "$key_path" "$email"
+                    bash "$SCRIPT_DIR/install.sh" "$domain" "$kcp_seed" "$www_root" "$cert_type" "$cert_path" "$key_path" "$email"
                 else
-                    bash install.sh "$domain" "$kcp_seed" "$www_root" "$cert_type" "" "" "$email"
+                    bash "$SCRIPT_DIR/install.sh" "$domain" "$kcp_seed" "$www_root" "$cert_type" "" "" "$email"
                 fi
                 # 重启服务
-                bash service.sh restart
+                bash "$SCRIPT_DIR/service.sh" restart
                 echo "配置已更新，服务已重启。"
             else
                 echo "操作已取消。"
             fi
+            read -r -p "按回车键继续..."
             ;;
         3)
             echo "正在重启服务..."
             # 调用service.sh脚本重启服务
-            bash service.sh restart
+            bash "$SCRIPT_DIR/service.sh" restart
+            read -r -p "按回车键继续..."
             ;;
         4)
             echo "正在停止服务..."
             # 调用service.sh脚本停止服务
-            bash service.sh stop
+            bash "$SCRIPT_DIR/service.sh" stop
+            read -r -p "按回车键继续..."
             ;;
         5)
             echo "正在准备生成客户端连接配置..."
             # 检查配置信息文件是否存在
-            if [ ! -f "./app/config_info.txt" ]; then
+            if [ ! -f "/etc/xray/config_info.txt" ]; then
                 echo "错误: 无法找到配置信息文件，请先安装服务。"
                 read -r -p "按回车键继续..."
                 return
             fi
-            
+
             # 读取配置信息
-            source "./app/config_info.txt"
-            
+            parse_config_file
+
             # 生成客户端配置文件
             echo "正在根据模板生成客户端配置文件..."
-            
+
+            # 获取当前脚本所在目录
+            CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
             # 确保配置文件目录存在
             mkdir -p "./app"
-            
+
             # 从模板生成配置文件，替换所有占位符
-            if [ -f "./cfg_tpl/xray_client.config.json" ]; then
+            if [ -f "$CURRENT_DIR/cfg_tpl/xray_client.config.json" ]; then
                 # 使用sed替换配置文件中的所有变量
                 sed -e "s|\${DOMAIN}|$DOMAIN|g" \
                     -e "s|\${UUID}|$UUID|g" \
                     -e "s|\${EMAIL}|${EMAIL:-admin@$DOMAIN}|g" \
                     -e "s|\${PUBLIC_KEY}|$PUBLIC_KEY|g" \
                     -e "s|\${KCP_SEED}|$KCP_SEED|g" \
-                    ./cfg_tpl/xray_client.config.json > ./app/xray_client_config.json
-                
+                    "$CURRENT_DIR/cfg_tpl/xray_client.config.json" > "./app/xray_client_config.json"
+
                 echo "客户端配置文件已生成: ./app/xray_client_config.json"
                 echo
                 echo "配置文件内容如下:"
@@ -289,13 +411,14 @@ show_menu() {
                 echo "----------------------------------------"
                 echo
             else
-                echo "错误: 找不到客户端配置模板文件 ./cfg_tpl/xray_client.config.json"
+                echo "错误: 找不到客户端配置模板文件 $CURRENT_DIR/cfg_tpl/xray_client.config.json"
             fi
+            read -r -p "按回车键继续..."
             ;;
         6)
             echo "正在查看客户端配置参数..."
             # 检查客户端配置信息文件是否存在
-            if [ ! -f "./app/client_config_info.txt" ]; then
+            if [ ! -f "/etc/xray/client_config_info.txt" ]; then
                 echo "错误: 无法找到客户端配置信息文件，请先安装服务。"
                 read -r -p "按回车键继续..."
                 return
@@ -304,7 +427,7 @@ show_menu() {
             # 显示客户端配置信息
             echo "客户端配置参数如下:"
             echo "----------------------------------------"
-            cat ./app/client_config_info.txt
+            cat /etc/xray/client_config_info.txt
             echo "----------------------------------------"
             read -r -p "按回车键继续..."
             ;;
@@ -312,7 +435,7 @@ show_menu() {
             echo "正在准备更新 Xray 和 Caddy 到最新版..."
 
             # 检查是否已安装服务
-            if [ ! -f "./app/xray/xray" ] && [ ! -f "./app/caddy/caddy" ]; then
+            if [ ! -f "/usr/local/bin/xray" ] && [ ! -f "/usr/local/bin/caddy" ]; then
                 echo "错误: 未找到已安装的服务，请先安装服务。"
                 read -r -p "按回车键继续..."
                 return
@@ -327,7 +450,7 @@ show_menu() {
             confirm=${confirm:-Y}
             if [[ $confirm =~ ^[Yy]$ ]]; then
                 echo "正在更新服务..."
-                if bash update.sh update; then
+                if bash "$SCRIPT_DIR/update.sh" update; then
                     echo "更新完成！"
                 else
                     echo "更新过程中出现问题，请检查上述错误信息。"
@@ -355,10 +478,10 @@ show_menu() {
             read -r -p "请选择操作 [1-3]: " restore_choice
             case $restore_choice in
                 1)
-                    bash update.sh list-backups
+                    bash "$SCRIPT_DIR/update.sh" list-backups
                     ;;
                 2)
-                    bash update.sh restore
+                    bash "$SCRIPT_DIR/update.sh" restore
                     ;;
                 3)
                     return
@@ -379,8 +502,12 @@ show_menu() {
                 return
             fi
 
-            # 检查当前工作目录，获取绝对路径
-            CURRENT_DIR=$(pwd)
+            # 检查程序是否存在
+            if [ ! -f "/usr/local/bin/caddy" ] || [ ! -f "/usr/local/bin/xray" ]; then
+                echo "错误：Xray 或 Caddy 未安装，请先安装服务。"
+                read -r -p "按回车键继续..."
+                return
+            fi
 
             # 创建caddy.service文件
             cat > /etc/systemd/system/caddy.service << EOF
@@ -393,8 +520,7 @@ Wants=network-online.target systemd-networkd-wait-online.service
 Type=simple
 User=root
 Group=root
-WorkingDirectory=$CURRENT_DIR
-ExecStart=$CURRENT_DIR/app/caddy/caddy run --config $CURRENT_DIR/app/caddy/caddy.json
+ExecStart=/usr/local/bin/caddy run --config /etc/caddy/caddy.json
 ExecReload=/bin/kill -USR1 \$MAINPID
 Restart=always
 RestartSec=10s
@@ -414,11 +540,10 @@ After=network.target nss-lookup.target
 [Service]
 User=root
 Group=root
-WorkingDirectory=$CURRENT_DIR
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
-ExecStart=$CURRENT_DIR/app/xray/xray run -c $CURRENT_DIR/app/xray/config.json
+ExecStart=/usr/local/bin/xray run -c /etc/xray/config.json
 Restart=on-failure
 RestartSec=10s
 LimitNOFILE=infinity
@@ -450,31 +575,27 @@ EOF
             read -r -p "按回车键继续..."
             ;;
         10)
-            echo "正在查看服务状态..."
-            # 调用service.sh脚本查看服务状态
-            bash service.sh status
-            read -r -p "按回车键继续..."
-            ;;
-        11)
             echo "正在准备卸载服务..."
             read -r -p "警告: 这将停止所有服务并删除所有配置文件。确定要继续吗? [y/N]: " confirm
             confirm=${confirm:-N}
             if [[ $confirm =~ ^[Yy]$ ]]; then
                 # 先停止服务
-                bash service.sh stop
+                bash "$SCRIPT_DIR/service.sh" stop
 
                 # 检查并删除systemd服务（如果存在）
                 if command -v systemctl &> /dev/null; then
-                    # 检查服务是否存在
+                    # 先停止并禁用服务，然后再删除服务文件
                     if systemctl list-unit-files | grep -q "caddy.service"; then
-                        echo "正在禁用并删除Caddy系统服务..."
-                        systemctl disable caddy.service
+                        echo "正在停止并禁用Caddy系统服务..."
+                        systemctl stop caddy.service || true
+                        systemctl disable caddy.service || true
                         rm -f /etc/systemd/system/caddy.service
                     fi
 
                     if systemctl list-unit-files | grep -q "xray.service"; then
-                        echo "正在禁用并删除Xray系统服务..."
-                        systemctl disable xray.service
+                        echo "正在停止并禁用Xray系统服务..."
+                        systemctl stop xray.service || true
+                        systemctl disable xray.service || true
                         rm -f /etc/systemd/system/xray.service
                     fi
 
@@ -483,20 +604,43 @@ EOF
                     echo "系统服务已成功移除。"
                 fi
 
-                # 删除配置文件和程序
-                echo "删除程序文件和配置..."
-                rm -rf ./app/caddy ./app/xray
-                echo "服务已卸载。"
+                # 删除程序文件
+                echo "删除程序文件..."
+                rm -f /usr/local/bin/xray
+                rm -f /usr/local/bin/caddy
+
+                # 删除配置文件
+                echo "删除配置文件..."
+                rm -rf /etc/xray
+                rm -rf /etc/caddy
+
+                # 删除日志文件
+                echo "删除日志文件..."
+                rm -f /var/log/xray.log
+                rm -f /var/log/caddy.log
+
+                # 删除PID文件
+                echo "删除PID文件..."
+                rm -rf /var/run/xray-caddy
+
+                # 删除快捷命令
+                echo "删除快捷命令..."
+                rm -f /usr/local/bin/xraycaddy
+
+                echo "服务已完全卸载。"
+                SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+                echo "注意：脚本目录 '$SCRIPT_DIR' 未被删除，您可以手动删除它。"
             else
                 echo "操作已取消。"
             fi
+            read -r -p "按回车键继续..."
             ;;
-        12)
+        11)
             echo "正在退出脚本..."
             exit 0
             ;;
         *)
-            echo "无效输入，请输入 1 到 12 之间的数字。"
+            echo "无效输入，请输入 1 到 11 之间的数字。"
             show_menu # 重新显示菜单
             ;;
     esac

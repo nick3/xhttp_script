@@ -1,0 +1,204 @@
+{
+  "admin": {
+    "disabled": true,
+    "config": {
+      "persist": false
+    }
+  },
+  "logging": {
+    "logs": {
+      "default": {
+        "writer": {
+          "output": "file",
+          "filename": "/var/log/caddy/error.log"
+        },
+        "encoder": {
+          "format": "console"
+        },
+        "level": "ERROR",
+        "exclude": [
+          "http.log.access.log0"
+        ]
+      },
+      "log0": {
+        "writer": {
+          "output": "file",
+          "filename": "/var/log/caddy/access.log"
+        },
+        "encoder": {
+          "format": "console"
+        },
+        "include": [
+          "http.log.access.log0"
+        ]
+      }
+    }
+  },
+  "apps": {
+    "tls": {
+      "certificates": {
+        "load_files": [
+          {
+            "certificate": "${CERT_PATH}",
+            "key": "${KEY_PATH}"
+          }
+        ]
+      }
+    },
+    "layer4": {
+      "servers": {
+        "udppy": {
+          "listen": [
+            "udp/:443"
+          ],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "proxy",
+                  "upstreams": [
+                    {
+                      "dial": [
+                        "udp/127.0.0.1:7443"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "http": {
+      "servers": {
+        "srvh1": {
+          "listen": [
+            ":80"
+          ],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "static_response",
+                  "headers": {
+                    "Location": [
+                      "https://{http.request.host}{http.request.uri}"
+                    ]
+                  },
+                  "status_code": 301
+                }
+              ]
+            }
+          ],
+          "protocols": [
+            "h1"
+          ]
+        },
+        "srvh3": {
+          "listen": [
+            "127.0.0.1:7443"
+          ],
+          "listener_wrappers": [
+            {
+              "wrapper": "proxy_protocol",
+              "allow": [
+                "127.0.0.1/32"
+              ]
+            },
+            {
+              "wrapper": "tls"
+            }
+          ],
+          "routes": [
+            {
+              "match": [
+                {
+                  "path": [
+                    "/speedtest/*"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "transport": {
+                    "protocol": "http",
+                    "versions": [
+                      "h2c",
+                      "2"
+                    ]
+                  },
+                  "upstreams": [
+                    {
+                      "dial": "unix/@uds2023.sock"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "handle": [
+                {
+                  "handler": "headers",
+                  "response": {
+                    "set": {
+                      "Alt-Svc": [
+                        "h3=\":443\"; ma=2592000"
+                      ],
+                      "Strict-Transport-Security": [
+                        "max-age=31536000; includeSubDomains; preload"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "handler": "file_server",
+                  "root": "${WWW_ROOT}"
+                }
+              ]
+            }
+          ],
+          "tls_connection_policies": [
+            {
+              "match": {
+                "sni": [
+                  "${DOMAIN}"
+                ]
+              },
+              "cipher_suites": [
+                "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+                "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+                "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256"
+              ],
+              "curves": [
+                "x25519",
+                "secp521r1",
+                "secp384r1",
+                "secp256r1"
+              ],
+              "alpn": [
+                "h3",
+                "h2",
+                "http/1.1"
+              ]
+            }
+          ],
+          "trusted_proxies": {
+            "source": "cloudflare",
+            "interval": "12h",
+            "timeout": "15s"
+          },
+          "logs": {
+            "default_logger_name": "log0"
+          },
+          "protocols": [
+            "h1",
+            "h2",
+            "h3"
+          ]
+        }
+      }
+    }
+  }
+}

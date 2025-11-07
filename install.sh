@@ -28,6 +28,20 @@ log_warning() {
     echo "[WARNING] $(date '+%Y-%m-%d %H:%M:%S') - $1" >&2
 }
 
+# --- Cleanup function for temporary files ---
+cleanup_temp_files() {
+    if [ -d "./app/temp" ]; then
+        log_warning "正在清理临时文件..."
+        rm -rf ./app/temp
+        log_info "临时文件已清理"
+    fi
+}
+
+# Set up trap to ensure cleanup on script exit, error, or interrupt
+trap cleanup_temp_files EXIT
+trap cleanup_temp_files ERR
+trap cleanup_temp_files INT TERM
+
 # --- Sanity Checks & Argument Parsing ---
 if [[ $# -lt 3 ]]; then
     log_error "使用方法: $0 <domain> <kcp_seed> <www_root_path> [cert_type] [cert_path] [key_path] [email]"
@@ -89,281 +103,123 @@ fi
 
 log_info "开始下载并配置 Xray-core 和 Caddy ..."
 log_info "域名 (Domain): $DOMAIN"
-# 不在日志中显示敏感信息如KCP种子
 log_info "网站根目录 (WWW Root): $WWW_ROOT"
+log_info "证书类型: $CERT_TYPE"
 
 # --- Prepare Directories ---
 log_info "创建所需目录..."
-mkdir -p ./app/caddy
-mkdir -p ./app/xray
-mkdir -p "$WWW_ROOT"
-# 创建日志目录
+# 创建系统目录
+mkdir -p /usr/local/bin
+mkdir -p /etc/xray
+mkdir -p /etc/caddy
 mkdir -p /var/log/caddy
 mkdir -p /var/log/xray
+mkdir -p "$WWW_ROOT"
+
+# 设置权限
+chmod 755 /usr/local/bin
+chmod 755 /etc/xray
+chmod 755 /etc/caddy
 chmod 755 /var/log/caddy
 chmod 755 /var/log/xray
-log_info "目录 ./app/caddy, ./app/xray, $WWW_ROOT, /var/log/caddy, /var/log/xray 已准备就绪。"
 
-# --- 1. Download Caddy ---
-log_info "正在使用 download.sh 下载 Caddy..."
-if ! bash "$DOWNLOAD_SCRIPT" caddy; then
+# 创建项目目录（仅用于存放管理脚本和临时文件）
+mkdir -p ./app/temp
+log_info "目录已准备就绪："
+
+# --- 2. Download Caddy executable to temp ---
+log_info "正在下载 Caddy 到临时目录..."
+if ! bash "$DOWNLOAD_SCRIPT" caddy --dir ./app/temp; then
     log_error "下载 Caddy 失败，请查看上面的错误信息。"
     exit 1
 fi
 
-# --- 2. Configure Caddy ---
+# --- 3. Install Caddy to system ---
+log_info "正在安装 Caddy 到 /usr/local/bin..."
+cp ./app/temp/caddy /usr/local/bin/caddy
+chmod +x /usr/local/bin/caddy
+log_info "Caddy 已安装到 /usr/local/bin/caddy"
+
+# --- 4. Configure Caddy ---
 log_info "正在配置 Caddy (caddy.json)..."
-CADDY_CONFIG_OUTPUT_PATH="./app/caddy/caddy.json"
 
 # 根据证书类型选择配置模板
 if [[ "$CERT_TYPE" == "existing" ]]; then
     log_info "使用现有证书配置: $CERT_PATH 和 $KEY_PATH"
-
-    # 创建使用现有证书的 Caddy 配置
-    cat > "$CADDY_CONFIG_OUTPUT_PATH" << EOF
-{
-  "admin": {
-    "disabled": true,
-    "config": {
-      "persist": false
-    }
-  },
-  "logging": {
-    "logs": {
-      "default": {
-        "writer": {
-          "output": "file",
-          "filename": "/var/log/caddy/error.log"
-        },
-        "encoder": {
-          "format": "console"
-        },
-        "level": "ERROR",
-        "exclude": [
-          "http.log.access.log0"
-        ]
-      },
-      "log0": {
-        "writer": {
-          "output": "file",
-          "filename": "/var/log/caddy/access.log"
-        },
-        "encoder": {
-          "format": "console"
-        },
-        "include": [
-          "http.log.access.log0"
-        ]
-      }
-    }
-  },
-  "apps": {
-    "tls": {
-      "certificates": {
-        "load_files": [
-          {
-            "certificate": "$CERT_PATH",
-            "key": "$KEY_PATH"
-          }
-        ]
-      }
-    },
-    "layer4": {
-      "servers": {
-        "udppy": {
-          "listen": [
-            "udp/:443"
-          ],
-          "routes": [
-            {
-              "handle": [
-                {
-                  "handler": "proxy",
-                  "upstreams": [
-                    {
-                      "dial": [
-                        "udp/127.0.0.1:7443"
-                      ]
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        }
-      }
-    },
-    "http": {
-      "servers": {
-        "srvh1": {
-          "listen": [
-            ":80"
-          ],
-          "routes": [
-            {
-              "handle": [
-                {
-                  "handler": "static_response",
-                  "headers": {
-                    "Location": [
-                      "https://{http.request.host}{http.request.uri}"
-                    ]
-                  },
-                  "status_code": 301
-                }
-              ]
-            }
-          ],
-          "protocols": [
-            "h1"
-          ]
-        },
-        "srvh3": {
-          "listen": [
-            "127.0.0.1:7443"
-          ],
-          "listener_wrappers": [
-            {
-              "wrapper": "proxy_protocol",
-              "allow": [
-                "127.0.0.1/32"
-              ]
-            },
-            {
-              "wrapper": "tls"
-            }
-          ],
-          "routes": [
-            {
-              "match": [
-                {
-                  "path": [
-                    "/speedtest/*"
-                  ]
-                }
-              ],
-              "handle": [
-                {
-                  "handler": "reverse_proxy",
-                  "transport": {
-                    "protocol": "http",
-                    "versions": [
-                      "h2c",
-                      "2"
-                    ]
-                  },
-                  "upstreams": [
-                    {
-                      "dial": "unix/@uds2023.sock"
-                    }
-                  ]
-                }
-              ]
-            },
-            {
-              "handle": [
-                {
-                  "handler": "headers",
-                  "response": {
-                    "set": {
-                      "Alt-Svc": [
-                        "h3=\":443\"; ma=2592000"
-                      ],
-                      "Strict-Transport-Security": [
-                        "max-age=31536000; includeSubDomains; preload"
-                      ]
-                    }
-                  }
-                },
-                {
-                  "handler": "file_server",
-                  "root": "$WWW_ROOT"
-                }
-              ]
-            }
-          ],
-          "tls_connection_policies": [
-            {
-              "match": {
-                "sni": [
-                  "$DOMAIN"
-                ]
-              },
-              "cipher_suites": [
-                "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
-                "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
-                "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256"
-              ],
-              "curves": [
-                "x25519",
-                "secp521r1",
-                "secp384r1",
-                "secp256r1"
-              ],
-              "alpn": [
-                "h3",
-                "h2",
-                "http/1.1"
-              ]
-            }
-          ],
-          "trusted_proxies": {
-            "source": "cloudflare",
-            "interval": "12h",
-            "timeout": "15s"
-          },
-          "logs": {
-            "default_logger_name": "log0"
-          },
-          "protocols": [
-            "h1",
-            "h2",
-            "h3"
-          ]
-        }
-      }
-    }
-  }
-}
-EOF
+    CADDY_CONFIG_TEMPLATE_PATH="./cfg_tpl/caddy_existing_cert_config.json"
 else
-    # 使用 ACME 自动申请证书的配置
     log_info "使用 ACME 自动申请证书配置"
-
-    # 使用原始模板并替换变量
     CADDY_CONFIG_TEMPLATE_PATH="./cfg_tpl/caddy_config.json"
-    if [ ! -f "$CADDY_CONFIG_TEMPLATE_PATH" ]; then
-        log_error "Caddy 配置文件模板未找到: $CADDY_CONFIG_TEMPLATE_PATH (当前工作目录: $(pwd))"
-        exit 1
-    fi
-
-    # Replace placeholders in Caddy config
-    # Escape $WWW_ROOT for sed if it contains slashes or other special characters
-    ESCAPED_WWW_ROOT=$(echo "$WWW_ROOT" | sed 's/[&/\\$*^]/\\&/g')
-    ESCAPED_DOMAIN=$(echo "$DOMAIN" | sed 's/[&/\\$*^]/\\&/g')
-    ESCAPED_EMAIL=$(echo "$EMAIL" | sed 's/[&/\\$*^]/\\&/g')
-
-    log_info "使用以下参数生成Caddy配置: DOMAIN=$DOMAIN, WWW_ROOT=$WWW_ROOT, EMAIL=$EMAIL"
-
-    # 使用 # 作为 sed 分隔符以避免路径中的 / 符号引起的问题
-    sed "s#\${DOMAIN}#$ESCAPED_DOMAIN#g" "$CADDY_CONFIG_TEMPLATE_PATH" | \
-        sed "s#\${WWW_ROOT}#$ESCAPED_WWW_ROOT#g" | \
-        sed "s#\${EMAIL}#$ESCAPED_EMAIL#g" > "$CADDY_CONFIG_OUTPUT_PATH"
 fi
 
+CADDY_CONFIG_OUTPUT_PATH="/etc/caddy/caddy.json"
+
+if [ ! -f "$CADDY_CONFIG_TEMPLATE_PATH" ]; then
+    log_error "Caddy 配置文件模板未找到: $CADDY_CONFIG_TEMPLATE_PATH (当前工作目录: $(pwd))"
+    exit 1
+fi
+
+# Prepare a default index.html if it doesn't exist in the user-specified WWW_ROOT
+DEFAULT_INDEX_HTML="${WWW_ROOT}/index.html"
+if [ ! -f "$DEFAULT_INDEX_HTML" ]; then
+    log_info "在 $DEFAULT_INDEX_HTML 创建一个默认的 index.html..."
+    # Ensure the directory for index.html exists (WWW_ROOT should already be created)
+    mkdir -p "$(dirname "$DEFAULT_INDEX_HTML")"
+    echo "<!DOCTYPE html><html><head><title>Welcome to $DOMAIN</title><style>body{font-family: sans-serif; margin: 2em; text-align: center;}</style></head><body><h1>Success!</h1><p>Your site <strong>$DOMAIN</strong> is working.</p><p><small>This is a default page.</small></p></body></html>" > "$DEFAULT_INDEX_HTML"
+    log_info "默认 index.html 创建成功。"
+fi
+
+# Replace placeholders in Caddy config
+# Escape $WWW_ROOT for sed if it contains slashes or other special characters
+ESCAPED_WWW_ROOT=$(echo "$WWW_ROOT" | sed 's/[&/\\$*^]/\\&/g')
+ESCAPED_DOMAIN=$(echo "$DOMAIN" | sed 's/[&/\\$*^]/\\&/g')
+ESCAPED_EMAIL=$(echo "$EMAIL" | sed 's/[&/\\$*^]/\\&/g')
+ESCAPED_CERT_PATH=$(echo "$CERT_PATH" | sed 's/[&/\\$*^]/\\&/g')
+ESCAPED_KEY_PATH=$(echo "$KEY_PATH" | sed 's/[&/\\$*^]/\\&/g')
+
+log_info "使用以下参数生成Caddy配置: DOMAIN=$DOMAIN, WWW_ROOT=$WWW_ROOT, EMAIL=$EMAIL"
+
+# 使用 # 作为 sed 分隔符以避免路径中的 / 符号引起的问题
+if [[ "$CERT_TYPE" == "existing" ]]; then
+    # 使用现有证书的模板，需要替换证书路径
+    sed -e "s#\${DOMAIN}#$ESCAPED_DOMAIN#g" \
+        -e "s#\${WWW_ROOT}#$ESCAPED_WWW_ROOT#g" \
+        -e "s#\${CERT_PATH}#$ESCAPED_CERT_PATH#g" \
+        -e "s#\${KEY_PATH}#$ESCAPED_KEY_PATH#g" \
+        "$CADDY_CONFIG_TEMPLATE_PATH" > "$CADDY_CONFIG_OUTPUT_PATH"
+else
+    # 使用ACME模板
+    sed -e "s#\${DOMAIN}#$ESCAPED_DOMAIN#g" \
+        -e "s#\${WWW_ROOT}#$ESCAPED_WWW_ROOT#g" \
+        -e "s#\${EMAIL}#$ESCAPED_EMAIL#g" \
+        "$CADDY_CONFIG_TEMPLATE_PATH" > "$CADDY_CONFIG_OUTPUT_PATH"
+fi
 log_info "Caddy 配置文件已生成: $CADDY_CONFIG_OUTPUT_PATH"
 
-# --- 3. Download Xray-core ---
-log_info "正在使用 download.sh 下载 Xray-core..."
-if ! bash "$DOWNLOAD_SCRIPT" xray; then
+# --- 5. Download Xray-core to temp ---
+log_info "正在下载 Xray-core 到临时目录..."
+if ! bash "$DOWNLOAD_SCRIPT" xray --dir ./app/temp; then
     log_error "下载 Xray-core 失败，请查看上面的错误信息。"
     exit 1
 fi
 
 # 确认xray可执行文件存在
-XRAY_EXE="./app/xray/xray"
+TEMP_XRAY="./app/temp/xray"
+if [ ! -f "$TEMP_XRAY" ]; then
+    log_error "Xray 可执行文件未找到: $TEMP_XRAY。请检查下载是否成功。"
+    exit 1
+fi
+
+# --- 6. Install Xray to system ---
+log_info "正在安装 Xray 到 /usr/local/bin..."
+cp "$TEMP_XRAY" /usr/local/bin/xray
+chmod +x /usr/local/bin/xray
+log_info "Xray 已安装到 /usr/local/bin/xray"
+
+# 确认安装成功
+XRAY_EXE="/usr/local/bin/xray"
 if [ ! -f "$XRAY_EXE" ]; then
-    log_error "Xray 可执行文件未找到: $XRAY_EXE。请检查下载是否成功。"
+    log_error "Xray 安装失败: $XRAY_EXE"
     exit 1
 fi
 
@@ -374,7 +230,7 @@ if [ -z "$UUID" ]; then
     log_error "生成 Xray UUID 失败。"
     exit 1
 fi
-log_info "UUID 生成完成（将在安装完成后显示）"
+log_info "UUID 生成完成（出于安全考虑不显示具体值）"
 
 # --- 5. Generate Private/Public Keys for Xray ---
 log_info "正在生成 Xray X25519 密钥对..."
@@ -384,14 +240,13 @@ KEY_EXIT_CODE=$?
 
 if [ $KEY_EXIT_CODE -ne 0 ]; then
     log_error "Xray x25519 命令执行失败，退出码: $KEY_EXIT_CODE"
-    log_error "命令输出: $KEY_OUTPUT"
     log_error "Xray 可执行文件路径: $XRAY_EXE"
     log_error "检查 Xray 可执行文件是否存在和可执行:"
     ls -la "$XRAY_EXE" 2>&1 || true
     exit 1
 fi
 
-log_info "Xray x25519 命令输出: $KEY_OUTPUT"
+log_info "X25519 密钥对生成完成（出于安全考虑不显示具体值）"
 
 # Xray 不同版本的 x25519 命令输出格式可能不同
 # 旧版本格式: "Private key:" 和 "Public key:"
@@ -410,10 +265,10 @@ fi
 
 log_info "X25519 密钥对生成完成（公钥将在安装完成后显示）"
 
-# --- 6. Configure Xray-core ---
+# --- 7. Configure Xray-core ---
 log_info "正在配置 Xray-core (config.json)..."
 XRAY_CONFIG_TEMPLATE_PATH="./cfg_tpl/xray_config.json"
-XRAY_CONFIG_OUTPUT_PATH="./app/xray/config.json"
+XRAY_CONFIG_OUTPUT_PATH="/etc/xray/config.json"
 
 if [ ! -f "$XRAY_CONFIG_TEMPLATE_PATH" ]; then
     log_error "Xray 配置文件模板未找到: $XRAY_CONFIG_TEMPLATE_PATH (当前工作目录: $(pwd))"
@@ -421,61 +276,27 @@ if [ ! -f "$XRAY_CONFIG_TEMPLATE_PATH" ]; then
 fi
 
 # Replace placeholders in Xray config
-# Escape special characters for sed - UUID, PRIVATE_KEY, and other variables might contain special regex characters
+# Escape special characters for sed if necessary. UUID, keys, domain, KCP_SEED are usually safe.
+# However, KCP_SEED could contain anything.
 ESCAPED_KCP_SEED=$(echo "$KCP_SEED" | sed 's/[&/\\$*^]/\\&/g')
-ESCAPED_UUID=$(echo "$UUID" | sed 's/[&/\\$*^]/\\&/g')
-ESCAPED_PRIVATE_KEY=$(echo "$PRIVATE_KEY" | sed 's/[&/\\$*^]/\\&/g')
-ESCAPED_DOMAIN=$(echo "$DOMAIN" | sed 's/[&/\\$*^]/\\&/g')
-ESCAPED_EMAIL=$(echo "$EMAIL" | sed 's/[&/\\$*^]/\\&/g')
+# Domain already escaped as ESCAPED_DOMAIN
+# Email already escaped as ESCAPED_EMAIL
+# UUID and Keys are base64-like, typically safe for sed.
 
-log_info "使用以下参数生成Xray配置: DOMAIN=$DOMAIN, EMAIL=$EMAIL (其他参数为敏感信息，不在日志中显示)"
-log_info "Xray 配置模板路径: $XRAY_CONFIG_TEMPLATE_PATH"
-log_info "Xray 配置输出路径: $XRAY_CONFIG_OUTPUT_PATH"
+log_info "正在生成Xray配置文件（出于安全考虑不显示敏感参数）"
 
 # 使用 # 作为 sed 分隔符以避免路径和特殊字符引起的问题
-# 每个sed命令执行后检查是否成功
-if ! sed "s#\${DOMAIN}#$ESCAPED_DOMAIN#g" "$XRAY_CONFIG_TEMPLATE_PATH" | \
-    sed "s#\${UUID}#$ESCAPED_UUID#g" | \
-    sed "s#\${PRIVATE_KEY}#$ESCAPED_PRIVATE_KEY#g" | \
-    sed "s#\${KCP_SEED}#$ESCAPED_KCP_SEED#g" | \
-    sed "s#\${EMAIL}#$ESCAPED_EMAIL#g" > "$XRAY_CONFIG_OUTPUT_PATH"; then
-    log_error "sed 命令执行失败，Xray 配置文件生成不成功"
-    log_error "可能的原因是变量中包含特殊字符导致 sed 命令失败"
-    exit 1
-fi
+sed -e "s#\${DOMAIN}#$ESCAPED_DOMAIN#g" \
+    -e "s#\${UUID}#$UUID#g" \
+    -e "s#\${PRIVATE_KEY}#$PRIVATE_KEY#g" \
+    -e "s#\${KCP_SEED}#$ESCAPED_KCP_SEED#g" \
+    -e "s#\${EMAIL}#$ESCAPED_EMAIL#g" \
+    "$XRAY_CONFIG_TEMPLATE_PATH" > "$XRAY_CONFIG_OUTPUT_PATH"
+log_info "Xray-core 配置文件已生成: $XRAY_CONFIG_OUTPUT_PATH"
 
-# 验证配置文件是否成功生成
-if [ -f "$XRAY_CONFIG_OUTPUT_PATH" ]; then
-    log_info "Xray-core 配置文件已生成: $XRAY_CONFIG_OUTPUT_PATH"
-    # 使用兼容的命令获取文件大小和权限
-    if command -v stat >/dev/null 2>&1; then
-        # Linux 系统
-        if stat --version >/dev/null 2>&1; then
-            log_info "配置文件大小: $(stat -c%s "$XRAY_CONFIG_OUTPUT_PATH") 字节"
-            log_info "配置文件权限: $(stat -c%a "$XRAY_CONFIG_OUTPUT_PATH")"
-        else
-            # macOS 系统
-            log_info "配置文件大小: $(stat -f%z "$XRAY_CONFIG_OUTPUT_PATH") 字节"
-            log_info "配置文件权限: $(stat -f%p "$XRAY_CONFIG_OUTPUT_PATH" | sed 's/...//')"
-        fi
-    else
-        log_info "配置文件存在 (无法获取详细信息)"
-    fi
-    # 只输出配置文件的结构信息，不输出敏感内容
-    log_info "配置文件行数: $(wc -l < "$XRAY_CONFIG_OUTPUT_PATH")"
-else
-    log_error "Xray 配置文件生成失败: $XRAY_CONFIG_OUTPUT_PATH"
-    log_error "检查模板文件内容:"
-    cat "$XRAY_CONFIG_TEMPLATE_PATH" 2>&1 || true
-    log_error "检查输出目录:"
-    ls -la "./app/xray/" 2>&1 || true
-    exit 1
-fi
-
-# 将配置信息保存到配置文件，便于服务启动脚本和客户端配置生成脚本使用
-CONFIG_INFO_FILE="./app/config_info.txt"
-log_info "正在保存配置信息到 $CONFIG_INFO_FILE..."
-cat > "$CONFIG_INFO_FILE" << EOF
+# --- 8. Save Configuration Info ---
+log_info "正在保存配置信息到 /etc/xray/config_info.txt..."
+cat > "/etc/xray/config_info.txt" << EOF
 # Xray & Caddy 配置信息
 DOMAIN=$DOMAIN
 UUID=$UUID
@@ -484,32 +305,19 @@ PUBLIC_KEY=$PUBLIC_KEY
 KCP_SEED=$KCP_SEED
 EMAIL=$EMAIL
 WWW_ROOT=$WWW_ROOT
+CERT_TYPE=$CERT_TYPE
+CERT_PATH=$CERT_PATH
+KEY_PATH=$KEY_PATH
+XRAY_BIN=/usr/local/bin/xray
+CADDY_BIN=/usr/local/bin/caddy
+XRAY_CONFIG=/etc/xray/config.json
+CADDY_CONFIG=/etc/caddy/caddy.json
 EOF
-chmod 600 "$CONFIG_INFO_FILE"  # 设置适当的文件权限，因为包含敏感信息
-log_info "配置信息已保存到 $CONFIG_INFO_FILE"
-
-log_info "---------------------------------------------------------------------"
-log_info "安装和配置完成!"
-log_info "---------------------------------------------------------------------"
-log_info "Xray-core 和 Caddy 已下载并配置完成。"
-log_info ""
-log_info "重要客户端配置信息 (请妥善保管):"
-log_info "  域名 (Address/Host):               $DOMAIN"
-log_info "  用户 ID (UUID for VLESS/VMess):    $UUID"
-log_info "  Xray 公钥 (PublicKey for Reality): $PUBLIC_KEY"
-log_info "  KCP 混淆密码 (Seed for mKCP):      $KCP_SEED"
-log_info "  (Xray 私钥已保存在服务器配置中，客户端无需使用)"
-log_info ""
-log_info "服务配置文件位置:"
-log_info "  Caddy: $CADDY_CONFIG_OUTPUT_PATH"
-log_info "  Xray:  $XRAY_CONFIG_OUTPUT_PATH"
-log_info ""
-log_info "请使用以下命令启动服务:"
-log_info "  bash service.sh start"
-log_info "---------------------------------------------------------------------"
+chmod 600 "/etc/xray/config_info.txt"  # 设置适当的文件权限，因为包含敏感信息
+log_info "配置信息已保存到 /etc/xray/config_info.txt"
 
 # 将客户端配置参数保存到单独的文件中，供后续查看
-CLIENT_CONFIG_INFO_FILE="./app/client_config_info.txt"
+CLIENT_CONFIG_INFO_FILE="/etc/xray/client_config_info.txt"
 log_info "正在保存客户端配置信息到 $CLIENT_CONFIG_INFO_FILE..."
 cat > "$CLIENT_CONFIG_INFO_FILE" << EOF
 =======================================
@@ -521,6 +329,47 @@ Xray 公钥 (PublicKey): $PUBLIC_KEY
 KCP 混淆密码 (Seed): $KCP_SEED
 邮箱: $EMAIL
 =======================================
+EOF
 
 chmod 600 "$CLIENT_CONFIG_INFO_FILE"  # 设置适当的文件权限，因为包含敏感信息
+log_info "客户端配置信息已保存到 $CLIENT_CONFIG_INFO_FILE"
+
+# --- 9. Create xraycaddy command shortcut ---
+log_info "正在创建 xraycaddy 全局命令..."
+CURRENT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ln -sf "$CURRENT_SCRIPT_DIR/main.sh" /usr/local/bin/xraycaddy
+chmod +x /usr/local/bin/xraycaddy
+log_info "快捷命令 'xraycaddy' 已创建完成"
+
+# 注意：临时文件清理由 EXIT trap 自动处理（见第 41 行）
+
+log_info "---------------------------------------------------------------------"
+log_info "安装和配置完成!"
+log_info "---------------------------------------------------------------------"
+log_info "Xray-core 和 Caddy 已安装并配置完成。"
+log_info ""
+log_info "重要客户端配置信息 (请妥善保管):"
+log_info "  域名 (Address/Host):               $DOMAIN"
+log_info "  用户 ID (UUID for VLESS/VMess):    [已生成，出于安全考虑不显示]"
+log_info "  Xray 公钥 (PublicKey for Reality): [已生成，出于安全考虑不显示]"
+log_info "  KCP 混淆密码 (Seed for mKCP):      [已生成，出于安全考虑不显示]"
+log_info "  (Xray 私钥和所有敏感信息已安全保存到 /etc/xray/ 目录)"
+log_info ""
+log_info "服务配置文件位置:"
+log_info "  程序:   /usr/local/bin/{xray,caddy}"
+log_info "  Caddy:  $CADDY_CONFIG_OUTPUT_PATH"
+log_info "  Xray:   $XRAY_CONFIG_OUTPUT_PATH"
+log_info "  配置信息: /etc/xray/config_info.txt"
+log_info "  客户端信息: /etc/xray/client_config_info.txt"
+log_info ""
+log_info "快捷命令:"
+log_info "  管理服务: xraycaddy (显示菜单)"
+log_info "  启动服务: xraycaddy start"
+log_info ""
+log_info "⚠️  重要提醒:"
+log_info "  - 所有敏感配置信息已保存到 /etc/xray/ 目录"
+log_info "  - 请妥善保管配置文件，避免泄露敏感信息"
+log_info "  - 可使用 'xraycaddy' 查看完整配置信息"
+log_info "---------------------------------------------------------------------"
+
 exit 0

@@ -262,12 +262,14 @@ run_main_script() {
 # 创建快捷方式
 create_shortcut() {
     log_info "创建全局命令快捷方式..."
-    
-    # 创建符号链接
-    ln -sf "$INSTALL_DIR/main.sh" /usr/local/bin/xray-caddy
-    chmod +x /usr/local/bin/xray-caddy
-    
-    log_success "快捷方式已创建，您可以在任何位置使用 'xray-caddy' 命令来管理服务"
+
+    # 注意：实际快捷命令会在安装过程中通过 install.sh 创建
+    # 这里只需要设置权限，确保用户可以直接运行
+    chmod +x "$INSTALL_DIR/main.sh"
+    chmod +x "$INSTALL_DIR/install.sh"
+    chmod +x "$INSTALL_DIR/service.sh"
+
+    log_success "脚本权限已设置，安装完成后将创建 'xraycaddy' 命令"
 }
 
 # 主函数
