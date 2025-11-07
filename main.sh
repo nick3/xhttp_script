@@ -172,6 +172,83 @@ show_menu() {
             read -r -p "按回车键继续..."
             ;;
         6)
+            echo "正在查看客户端配置参数..."
+            # 检查客户端配置信息文件是否存在
+            if [ ! -f "/etc/xray/client_config_info.txt" ]; then
+                echo "错误: 无法找到客户端配置信息文件，请先安装服务。"
+                read -r -p "按回车键继续..."
+                return
+            fi
+
+            # 显示客户端配置信息
+            echo "客户端配置参数如下:"
+            echo "----------------------------------------"
+            cat /etc/xray/client_config_info.txt
+            echo "----------------------------------------"
+            read -r -p "按回车键继续..."
+            ;;
+        7)
+            echo "正在准备更新 Xray 和 Caddy 到最新版..."
+
+            # 检查是否已安装服务
+            if [ ! -f "/usr/local/bin/xray" ] && [ ! -f "/usr/local/bin/caddy" ]; then
+                echo "错误: 未找到已安装的服务，请先安装服务。"
+                read -r -p "按回车键继续..."
+                return
+            fi
+
+            echo "这将更新 Xray 和 Caddy 到最新版本。"
+            echo "更新前会自动创建当前版本的备份。"
+            echo "如果更新过程中出现问题，您可以使用恢复功能回到之前的版本。"
+            echo ""
+
+            read -r -p "确认继续更新？ [Y/n]: " confirm
+            confirm=${confirm:-Y}
+            if [[ $confirm =~ ^[Yy]$ ]]; then
+                echo "正在更新服务..."
+                if bash update.sh update; then
+                    echo "更新完成！"
+                else
+                    echo "更新过程中出现问题，请检查上述错误信息。"
+                fi
+            else
+                echo "更新已取消。"
+            fi
+            read -r -p "按回车键继续..."
+            ;;
+        8)
+            echo "正在准备恢复服务到备份版本..."
+
+            # 检查是否有备份
+            if [ ! -d "./backups" ] || [ -z "$(ls -A "./backups" 2>/dev/null)" ]; then
+                echo "没有找到备份文件。"
+                read -r -p "按回车键继续..."
+                return
+            fi
+
+            echo "可用操作:"
+            echo "1. 查看所有备份"
+            echo "2. 恢复备份"
+            echo "3. 返回主菜单"
+
+            read -r -p "请选择操作 [1-3]: " restore_choice
+            case $restore_choice in
+                1)
+                    bash update.sh list-backups
+                    ;;
+                2)
+                    bash update.sh restore
+                    ;;
+                3)
+                    return
+                    ;;
+                *)
+                    echo "无效选项。"
+                    ;;
+            esac
+            read -r -p "按回车键继续..."
+            ;;
+        9)
             echo "正在准备设为开机自启服务..."
 
             # 确保systemd可用
@@ -253,7 +330,61 @@ EOF
             echo "  查看状态: systemctl status caddy.service xray.service"
             read -r -p "按回车键继续..."
             ;;
-        7)
+        10)
+            echo "正在查看服务状态..."
+
+            # 检查systemd服务状态
+            if command -v systemctl &> /dev/null; then
+                echo "=== Systemd 服务状态 ==="
+                echo "Caddy 服务:"
+                systemctl status caddy.service --no-pager || echo "  Caddy 服务未运行或未配置"
+                echo ""
+                echo "Xray 服务:"
+                systemctl status xray.service --no-pager || echo "  Xray 服务未运行或未配置"
+            fi
+
+            # 检查手动启动的服务状态
+            echo ""
+            echo "=== 手动服务状态 ==="
+            bash service.sh status
+            read -r -p "按回车键继续..."
+            ;;
+        11)
+            echo "正在查看服务日志..."
+
+            echo "请选择要查看的日志:"
+            echo "1. Caddy 服务日志"
+            echo "2. Xray 服务日志"
+            echo "3. 返回主菜单"
+
+            read -r -p "请选择 [1-3]: " log_choice
+            case $log_choice in
+                1)
+                    if [ -f "/var/log/caddy.log" ]; then
+                        echo "=== Caddy 服务日志 (最后50行) ==="
+                        tail -n 50 /var/log/caddy.log
+                    else
+                        echo "未找到 Caddy 日志文件。"
+                    fi
+                    ;;
+                2)
+                    if [ -f "/var/log/xray.log" ]; then
+                        echo "=== Xray 服务日志 (最后50行) ==="
+                        tail -n 50 /var/log/xray.log
+                    else
+                        echo "未找到 Xray 日志文件。"
+                    fi
+                    ;;
+                3)
+                    return
+                    ;;
+                *)
+                    echo "无效选项。"
+                    ;;
+            esac
+            read -r -p "按回车键继续..."
+            ;;
+        12)
             echo "正在准备卸载服务..."
             read -r -p "警告: 这将停止所有服务并删除所有配置文件。确定要继续吗? [y/N]: " confirm
             confirm=${confirm:-N}
@@ -310,12 +441,12 @@ EOF
             fi
             read -r -p "按回车键继续..."
             ;;
-        8)
+        13)
             echo "正在退出脚本..."
             exit 0
             ;;
         *)
-            echo "无效输入，请输入 1 到 8 之间的数字。"
+            echo "无效输入，请输入 1 到 13 之间的数字。"
             show_menu # 重新显示菜单
             ;;
     esac
