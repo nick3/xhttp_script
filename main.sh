@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# 获取脚本所在目录，用于支持xraycaddy快捷命令
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # 检查当前系统是否符合脚本要求，必须为x86_64架构的Linux系统
 if [[ $(uname -m) != "x86_64" ]]; then
     echo "当前系统不支持，请使用x86_64架构的Linux系统。"
@@ -279,13 +282,13 @@ show_menu() {
 
             # 执行安装服务脚本 install.sh
             if [[ "$cert_type" == "existing" ]]; then
-                if ! bash install.sh "$domain" "$kcp_seed" "$www_root" "$cert_type" "$cert_path" "$key_path" "$email"; then
+                if ! bash "$SCRIPT_DIR/install.sh" "$domain" "$kcp_seed" "$www_root" "$cert_type" "$cert_path" "$key_path" "$email"; then
                     log_error "安装过程失败，请检查上述错误信息。"
                     read -r -p "按回车键继续..."
                     return 1
                 fi
             else
-                if ! bash install.sh "$domain" "$kcp_seed" "$www_root" "$cert_type" "" "" "$email"; then
+                if ! bash "$SCRIPT_DIR/install.sh" "$domain" "$kcp_seed" "$www_root" "$cert_type" "" "" "$email"; then
                     log_error "安装过程失败，请检查上述错误信息。"
                     read -r -p "按回车键继续..."
                     return 1
@@ -297,9 +300,9 @@ show_menu() {
             start_service=${start_service:-Y}
             if [[ $start_service =~ ^[Yy]$ ]]; then
                 echo "正在启动服务..."
-                bash service.sh start
+                bash "$SCRIPT_DIR/service.sh" start
             else
-                echo "服务未启动，您可以稍后使用 'bash service.sh start' 命令启动服务。"
+                echo "服务未启动，您可以稍后使用 'bash "$SCRIPT_DIR/service.sh" start' 命令启动服务。"
             fi
             read -r -p "按回车键继续..."
             ;;
@@ -345,12 +348,12 @@ show_menu() {
                 echo "正在更新配置并重启服务..."
                 # 调用安装脚本进行配置更新
                 if [[ "$cert_type" == "existing" ]]; then
-                    bash install.sh "$domain" "$kcp_seed" "$www_root" "$cert_type" "$cert_path" "$key_path" "$email"
+                    bash "$SCRIPT_DIR/install.sh" "$domain" "$kcp_seed" "$www_root" "$cert_type" "$cert_path" "$key_path" "$email"
                 else
-                    bash install.sh "$domain" "$kcp_seed" "$www_root" "$cert_type" "" "" "$email"
+                    bash "$SCRIPT_DIR/install.sh" "$domain" "$kcp_seed" "$www_root" "$cert_type" "" "" "$email"
                 fi
                 # 重启服务
-                bash service.sh restart
+                bash "$SCRIPT_DIR/service.sh" restart
                 echo "配置已更新，服务已重启。"
             else
                 echo "操作已取消。"
@@ -360,13 +363,13 @@ show_menu() {
         3)
             echo "正在重启服务..."
             # 调用service.sh脚本重启服务
-            bash service.sh restart
+            bash "$SCRIPT_DIR/service.sh" restart
             read -r -p "按回车键继续..."
             ;;
         4)
             echo "正在停止服务..."
             # 调用service.sh脚本停止服务
-            bash service.sh stop
+            bash "$SCRIPT_DIR/service.sh" stop
             read -r -p "按回车键继续..."
             ;;
         5)
@@ -447,7 +450,7 @@ show_menu() {
             confirm=${confirm:-Y}
             if [[ $confirm =~ ^[Yy]$ ]]; then
                 echo "正在更新服务..."
-                if bash update.sh update; then
+                if bash "$SCRIPT_DIR/update.sh" update; then
                     echo "更新完成！"
                 else
                     echo "更新过程中出现问题，请检查上述错误信息。"
@@ -475,10 +478,10 @@ show_menu() {
             read -r -p "请选择操作 [1-3]: " restore_choice
             case $restore_choice in
                 1)
-                    bash update.sh list-backups
+                    bash "$SCRIPT_DIR/update.sh" list-backups
                     ;;
                 2)
-                    bash update.sh restore
+                    bash "$SCRIPT_DIR/update.sh" restore
                     ;;
                 3)
                     return
@@ -577,7 +580,7 @@ EOF
             confirm=${confirm:-N}
             if [[ $confirm =~ ^[Yy]$ ]]; then
                 # 先停止服务
-                bash service.sh stop
+                bash "$SCRIPT_DIR/service.sh" stop
 
                 # 检查并删除systemd服务（如果存在）
                 if command -v systemctl &> /dev/null; then
