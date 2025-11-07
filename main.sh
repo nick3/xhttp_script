@@ -96,10 +96,9 @@ parse_config_file() {
                     fi
                     ;;
                 KCP_SEED)
-                    # Basic validation for seed (allow common characters)
-                    if [[ "$value" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-                        KCP_SEED="$value"
-                    fi
+                    # KCP 种子可以是任何字符串，因此我们不进行严格验证。
+                    # 在 install.sh 中，它在使用 sed 之前已经进行了转义。
+                    KCP_SEED="$value"
                     ;;
                 EMAIL)
                     if [[ "$value" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
@@ -626,6 +625,8 @@ EOF
                 rm -f /usr/local/bin/xraycaddy
 
                 echo "服务已完全卸载。"
+                SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+                echo "注意：脚本目录 '$SCRIPT_DIR' 未被删除，您可以手动删除它。"
             else
                 echo "操作已取消。"
             fi
