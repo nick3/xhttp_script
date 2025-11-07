@@ -32,6 +32,112 @@ log_warning() {
     echo "[WARNING] $(date '+%Y-%m-%d %H:%M:%S') - $1" >&2
 }
 
+# --- Secure configuration file parser ---
+# This function safely parses the config file without executing arbitrary code
+parse_config_file() {
+    local config_file="/etc/xray/config_info.txt"
+
+    if [ ! -f "$config_file" ]; then
+        log_error "配置文件不存在: $config_file"
+        return 1
+    fi
+
+    if [ ! -r "$config_file" ]; then
+        log_error "配置文件不可读: $config_file"
+        return 1
+    fi
+
+    # Reset global variables
+    DOMAIN=""
+    UUID=""
+    PRIVATE_KEY=""
+    PUBLIC_KEY=""
+    KCP_SEED=""
+    EMAIL=""
+    WWW_ROOT=""
+    CERT_TYPE=""
+    CERT_PATH=""
+    KEY_PATH=""
+    XRAY_BIN=""
+    CADDY_BIN=""
+    XRAY_CONFIG=""
+    CADDY_CONFIG=""
+
+    # Parse file line by line to avoid code injection
+    while IFS= read -r line || [ -n "$line" ]; do
+        # Skip empty lines and comments
+        [[ -z "$line" ]] && continue
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+
+        # Extract key-value pairs safely
+        if [[ "$line" =~ ^([A-Z_]+)=(.*)$ ]]; then
+            local key="${BASH_REMATCH[1]}"
+            local value="${BASH_REMATCH[2]}"
+
+            # Set values based on key, with basic validation
+            case $key in
+                DOMAIN)
+                    if [[ "$value" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+                        DOMAIN="$value"
+                    fi
+                    ;;
+                UUID)
+                    if [[ "$value" =~ ^[a-fA-F0-9-]+$ ]]; then
+                        UUID="$value"
+                    fi
+                    ;;
+                PRIVATE_KEY|PUBLIC_KEY)
+                    # Base64-like validation for keys
+                    if [[ "$value" =~ ^[a-zA-Z0-9/+_=-]+$ ]]; then
+                        case $key in
+                            PRIVATE_KEY) PRIVATE_KEY="$value" ;;
+                            PUBLIC_KEY)  PUBLIC_KEY="$value"  ;;
+                        esac
+                    fi
+                    ;;
+                KCP_SEED)
+                    # Basic validation for seed (allow common characters)
+                    if [[ "$value" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+                        KCP_SEED="$value"
+                    fi
+                    ;;
+                EMAIL)
+                    if [[ "$value" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+                        EMAIL="$value"
+                    fi
+                    ;;
+                WWW_ROOT)
+                    # Path validation (avoid path traversal)
+                    if [[ "$value" =~ ^/ ]] && [[ ! "$value" =~ \.\. ]]; then
+                        WWW_ROOT="$value"
+                    fi
+                    ;;
+                CERT_TYPE)
+                    if [[ "$value" =~ ^(acme|existing)$ ]]; then
+                        CERT_TYPE="$value"
+                    fi
+                    ;;
+                CERT_PATH|KEY_PATH|XRAY_BIN|CADDY_BIN|XRAY_CONFIG|CADDY_CONFIG)
+                    # Path validation for file paths
+                    if [[ "$value" =~ ^/ ]] && [[ ! "$value" =~ \.\. ]]; then
+                        case $key in
+                            CERT_PATH)   CERT_PATH="$value" ;;
+                            KEY_PATH)    KEY_PATH="$value" ;;
+                            XRAY_BIN)    XRAY_BIN="$value" ;;
+                            CADDY_BIN)   CADDY_BIN="$value" ;;
+                            XRAY_CONFIG) XRAY_CONFIG="$value" ;;
+                            CADDY_CONFIG) CADDY_CONFIG="$value" ;;
+                        esac
+                    fi
+                    ;;
+            esac
+        fi
+    done < "$config_file"
+
+    log_info "配置文件解析完成"
+    return 0
+}
+
 for cmd in "${REQUIRED_CMDS[@]}"; do
     if ! command -v "$cmd" &> /dev/null; then
         log_error "$cmd 命令未找到。请先安装 $cmd。"
@@ -210,7 +316,7 @@ show_menu() {
             fi
 
             # 从配置文件中读取现有配置
-            source "/etc/xray/config_info.txt"
+            parse_config_file
 
             # 如果用户没有输入某个配置项，则使用配置文件中的值
             domain=${domain:-$DOMAIN}
@@ -274,7 +380,7 @@ show_menu() {
             fi
 
             # 读取配置信息
-            source "/etc/xray/config_info.txt"
+            parse_config_file
 
             # 生成客户端配置文件
             echo "正在根据模板生成客户端配置文件..."

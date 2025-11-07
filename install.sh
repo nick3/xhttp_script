@@ -28,6 +28,20 @@ log_warning() {
     echo "[WARNING] $(date '+%Y-%m-%d %H:%M:%S') - $1" >&2
 }
 
+# --- Cleanup function for temporary files ---
+cleanup_temp_files() {
+    if [ -d "./app/temp" ]; then
+        log_warning "正在清理临时文件..."
+        rm -rf ./app/temp
+        log_info "临时文件已清理"
+    fi
+}
+
+# Set up trap to ensure cleanup on script exit, error, or interrupt
+trap cleanup_temp_files EXIT
+trap cleanup_temp_files ERR
+trap cleanup_temp_files INT TERM
+
 # --- Sanity Checks & Argument Parsing ---
 if [[ $# -lt 3 ]]; then
     log_error "使用方法: $0 <domain> <kcp_seed> <www_root_path> [cert_type] [cert_path] [key_path] [email]"
@@ -89,8 +103,8 @@ fi
 
 log_info "开始下载并配置 Xray-core 和 Caddy ..."
 log_info "域名 (Domain): $DOMAIN"
-log_info "KCP 混淆种子 (KCP Seed): $KCP_SEED" # Be careful logging sensitive info
 log_info "网站根目录 (WWW Root): $WWW_ROOT"
+log_info "证书类型: $CERT_TYPE"
 
 # --- Prepare Directories ---
 log_info "创建所需目录..."
@@ -214,7 +228,7 @@ if [ -z "$UUID" ]; then
     log_error "生成 Xray UUID 失败。"
     exit 1
 fi
-log_info "生成的 UUID: $UUID"
+log_info "UUID 生成完成（出于安全考虑不显示具体值）"
 
 # --- 5. Generate Private/Public Keys for Xray ---
 log_info "正在生成 Xray X25519 密钥对..."
@@ -224,14 +238,13 @@ KEY_EXIT_CODE=$?
 
 if [ $KEY_EXIT_CODE -ne 0 ]; then
     log_error "Xray x25519 命令执行失败，退出码: $KEY_EXIT_CODE"
-    log_error "命令输出: $KEY_OUTPUT"
     log_error "Xray 可执行文件路径: $XRAY_EXE"
     log_error "检查 Xray 可执行文件是否存在和可执行:"
     ls -la "$XRAY_EXE" 2>&1 || true
     exit 1
 fi
 
-log_info "Xray x25519 命令输出: $KEY_OUTPUT"
+log_info "X25519 密钥对生成完成（出于安全考虑不显示具体值）"
 
 # Xray 不同版本的 x25519 命令输出格式可能不同
 # 旧版本格式: "Private key:" 和 "Public key:"
@@ -268,7 +281,7 @@ ESCAPED_KCP_SEED=$(echo "$KCP_SEED" | sed 's/[&/\\$*^]/\\&/g')
 # Email already escaped as ESCAPED_EMAIL
 # UUID and Keys are base64-like, typically safe for sed.
 
-log_info "使用以下参数生成Xray配置: DOMAIN=$DOMAIN, UUID=$UUID, EMAIL=$EMAIL, KCP_SEED=$KCP_SEED"
+log_info "正在生成Xray配置文件（出于安全考虑不显示敏感参数）"
 
 # 使用 # 作为 sed 分隔符以避免路径和特殊字符引起的问题
 sed "s#\${DOMAIN}#$ESCAPED_DOMAIN#g" "$XRAY_CONFIG_TEMPLATE_PATH" | \
@@ -337,20 +350,26 @@ log_info "Xray-core 和 Caddy 已安装并配置完成。"
 log_info ""
 log_info "重要客户端配置信息 (请妥善保管):"
 log_info "  域名 (Address/Host):               $DOMAIN"
-log_info "  用户 ID (UUID for VLESS/VMess):    $UUID"
-log_info "  Xray 公钥 (PublicKey for Reality): $PUBLIC_KEY"
-log_info "  KCP 混淆密码 (Seed for mKCP):      $KCP_SEED"
-log_info "  (Xray 私钥位于服务器配置中，请勿泄露: $PRIVATE_KEY)"
+log_info "  用户 ID (UUID for VLESS/VMess):    [已生成，出于安全考虑不显示]"
+log_info "  Xray 公钥 (PublicKey for Reality): [已生成，出于安全考虑不显示]"
+log_info "  KCP 混淆密码 (Seed for mKCP):      [已生成，出于安全考虑不显示]"
+log_info "  (Xray 私钥和所有敏感信息已安全保存到 /etc/xray/ 目录)"
 log_info ""
 log_info "服务配置文件位置:"
 log_info "  程序:   /usr/local/bin/{xray,caddy}"
 log_info "  Caddy:  $CADDY_CONFIG_OUTPUT_PATH"
 log_info "  Xray:   $XRAY_CONFIG_OUTPUT_PATH"
 log_info "  配置信息: /etc/xray/config_info.txt"
+log_info "  客户端信息: /etc/xray/client_config_info.txt"
 log_info ""
 log_info "快捷命令:"
 log_info "  管理服务: xraycaddy"
 log_info "  直接启动: xraycaddy"
+log_info ""
+log_info "⚠️  重要提醒:"
+log_info "  - 所有敏感配置信息已保存到 /etc/xray/ 目录"
+log_info "  - 请妥善保管配置文件，避免泄露敏感信息"
+log_info "  - 可使用 'xraycaddy' 查看完整配置信息"
 log_info "---------------------------------------------------------------------"
 
 exit 0
