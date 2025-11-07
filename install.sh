@@ -84,13 +84,6 @@ chmod 755 /var/log/xray
 mkdir -p ./app/temp
 log_info "目录已准备就绪："
 
-# --- 1. Download Caddy ---
-log_info "正在使用 download.sh 下载 Caddy..."
-if ! bash "$DOWNLOAD_SCRIPT" caddy; then
-    log_error "下载 Caddy 失败，请查看上面的错误信息。"
-    exit 1
-fi
-
 # --- 2. Download Caddy executable to temp ---
 log_info "正在下载 Caddy 到临时目录..."
 if ! bash "$DOWNLOAD_SCRIPT" caddy; then
@@ -176,17 +169,37 @@ log_info "生成的 UUID: $UUID"
 
 # --- 5. Generate Private/Public Keys for Xray ---
 log_info "正在生成 Xray X25519 密钥对..."
-KEY_OUTPUT=$("$XRAY_EXE" x25519)
-PRIVATE_KEY=$(echo "$KEY_OUTPUT" | grep "Private key:" | awk '{print $3}')
-PUBLIC_KEY=$(echo "$KEY_OUTPUT" | grep "Public key:" | awk '{print $3}')
+# 捕获命令执行的完整输出和错误信息
+KEY_OUTPUT=$("$XRAY_EXE" x25519 2>&1)
+KEY_EXIT_CODE=$?
 
-if [ -z "$PRIVATE_KEY" ] || [ -z "$PUBLIC_KEY" ]; then
-    log_error "生成 X25519 密钥对失败。"
+if [ $KEY_EXIT_CODE -ne 0 ]; then
+    log_error "Xray x25519 命令执行失败，退出码: $KEY_EXIT_CODE"
     log_error "命令输出: $KEY_OUTPUT"
+    log_error "Xray 可执行文件路径: $XRAY_EXE"
+    log_error "检查 Xray 可执行文件是否存在和可执行:"
+    ls -la "$XRAY_EXE" 2>&1 || true
     exit 1
 fi
-log_info "生成的 Private Key: $PRIVATE_KEY"
-log_info "生成的 Public Key: $PUBLIC_KEY (此公钥通常用于客户端配置)"
+
+log_info "Xray x25519 命令输出: $KEY_OUTPUT"
+
+# Xray 不同版本的 x25519 命令输出格式可能不同
+# 旧版本格式: "Private key:" 和 "Public key:"
+# 新版本格式: "PrivateKey:" 和 "Password:" (其中 Password 是公钥)
+PRIVATE_KEY=$(echo "$KEY_OUTPUT" | grep -E "(Private key:|PrivateKey:)" | awk '{print $NF}')
+PUBLIC_KEY=$(echo "$KEY_OUTPUT" | grep -E "(Public key:|Password:)" | awk '{print $NF}')
+
+# 检查是否成功提取了密钥
+if [ -z "$PRIVATE_KEY" ] || [ -z "$PUBLIC_KEY" ]; then
+    log_error "无法从命令输出中提取密钥。"
+    log_error "命令输出: $KEY_OUTPUT"
+    log_error "尝试直接执行命令以查看详细输出:"
+    "$XRAY_EXE" x25519
+    exit 1
+fi
+
+log_info "X25519 密钥对生成完成（公钥将在安装完成后显示）"
 
 # --- 7. Configure Xray-core ---
 log_info "正在配置 Xray-core (config.json)..."
@@ -234,6 +247,24 @@ CADDY_CONFIG=/etc/caddy/caddy.json
 EOF
 chmod 600 "/etc/xray/config_info.txt"  # 设置适当的文件权限，因为包含敏感信息
 log_info "配置信息已保存到 /etc/xray/config_info.txt"
+
+# 将客户端配置参数保存到单独的文件中，供后续查看
+CLIENT_CONFIG_INFO_FILE="/etc/xray/client_config_info.txt"
+log_info "正在保存客户端配置信息到 $CLIENT_CONFIG_INFO_FILE..."
+cat > "$CLIENT_CONFIG_INFO_FILE" << EOF
+=======================================
+客户端连接配置参数
+=======================================
+域名 (Address/Host): $DOMAIN
+用户 ID (UUID): $UUID
+Xray 公钥 (PublicKey): $PUBLIC_KEY
+KCP 混淆密码 (Seed): $KCP_SEED
+邮箱: $EMAIL
+=======================================
+EOF
+
+chmod 600 "$CLIENT_CONFIG_INFO_FILE"  # 设置适当的文件权限，因为包含敏感信息
+log_info "客户端配置信息已保存到 $CLIENT_CONFIG_INFO_FILE"
 
 # --- 9. Create xraycaddy command shortcut ---
 log_info "正在创建 xraycaddy 全局命令..."
