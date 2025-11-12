@@ -18,26 +18,38 @@ jobs:
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
     runs-on: ubuntu-latest
-    env:
-      ANTHROPIC_BASE_URL: "${{ secrets.CC_BASE_URL }}"
-      ANTHROPIC_API_KEY: "${{ secrets.CC_API_KEY }}"
-      ANTHROPIC_MODEL: "${{ secrets.CC_MODEL }}"
     permissions:
       contents: read
       pull-requests: read
       issues: read
       id-token: write
+      actions: read # Required for Claude to read CI results on PRs
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
       - name: Run Claude Code
         id: claude
         uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: ${{ secrets.ANTHROPIC_DEFAULT_HAIKU_MODEL || secrets.ANTHROPIC_MODEL }}
+          ANTHROPIC_DEFAULT_OPUS_MODEL: ${{ secrets.ANTHROPIC_DEFAULT_OPUS_MODEL || secrets.ANTHROPIC_MODEL }}
+          ANTHROPIC_DEFAULT_SONNET_MODEL: ${{ secrets.ANTHROPIC_DEFAULT_SONNET_MODEL || secrets.ANTHROPIC_MODEL }}
+          ANTHROPIC_MODEL: ${{ secrets.ANTHROPIC_MODEL }}
         with:
-          anthropic_api_key: ${{ secrets.CC_API_KEY }}
-          claude_args: |
-            --allowedTools "Bash(bun install),Bash(bun test:*),Bash(bun run format),Bash(bun typecheck)"
-            --model "${{ secrets.CC_MODEL }}"
+          anthropic_api_key: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
+
+          # This is an optional setting that allows Claude to read CI results on PRs
+          additional_permissions: |
+            actions: read
+
+          # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
+          # prompt: 'Update the pull request description to include a summary of changes.'
+
+          # Custom model configuration for API router
+          claude_args: '--model ${{ secrets.ANTHROPIC_MODEL }}'
+
