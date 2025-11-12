@@ -51,5 +51,5 @@ jobs:
           # prompt: 'Update the pull request description to include a summary of changes.'
 
           # Custom model configuration for API router
-          claude_args: '--model ${{ secrets.ANTHROPIC_MODEL }}'
+          claude_args: '--no-interactive --model ${{ secrets.ANTHROPIC_MODEL }}'
 
