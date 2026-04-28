@@ -28,6 +28,349 @@ log_warning() {
     echo "[WARNING] $(date '+%Y-%m-%d %H:%M:%S') - $1" >&2
 }
 
+HEALTH_FAILURES=0
+HEALTH_WARNINGS=0
+HEALTH_REPORT_STARTED=0
+
+start_health_report() {
+    if [ "$HEALTH_REPORT_STARTED" -eq 0 ]; then
+        echo "=== Xray-Caddy Install Health Report ==="
+        HEALTH_REPORT_STARTED=1
+    fi
+}
+
+report_pass() {
+    start_health_report
+    printf 'PASS  %-24s %s\n' "$1" "$2"
+}
+
+report_warn() {
+    start_health_report
+    HEALTH_WARNINGS=$((HEALTH_WARNINGS + 1))
+    printf 'WARN  %-24s %s\n' "$1" "$2"
+}
+
+report_fail() {
+    start_health_report
+    HEALTH_FAILURES=$((HEALTH_FAILURES + 1))
+    printf 'FAIL  %-24s %s\n' "$1" "$2"
+}
+
+report_info() {
+    start_health_report
+    printf 'INFO  %-24s %s\n' "$1" "$2"
+}
+
+emit_health_result() {
+    start_health_report
+    if [ "$HEALTH_FAILURES" -gt 0 ]; then
+        echo "RESULT FAIL"
+    else
+        echo "RESULT PASS"
+    fi
+    echo "WARNINGS $HEALTH_WARNINGS"
+}
+
+redact_sensitive_output() {
+    local text
+    text=$(cat)
+    for secret in "${PRIVATE_KEY:-}" "${PUBLIC_KEY:-}" "${UUID:-}" "${KCP_SEED:-}"; do
+        if [ -n "$secret" ]; then
+            text="${text//"$secret"/<hidden>}"
+        fi
+    done
+    printf '%s\n' "$text"
+}
+
+print_journal_summary() {
+    local unit="$1"
+    log_error "${unit} 最近日志（已脱敏）:"
+    journalctl -u "$unit" -n 30 --no-pager 2>&1 | redact_sensitive_output | while IFS= read -r line; do
+        log_error "  $line"
+    done
+}
+
+require_executable() {
+    local label="$1"
+    local path="$2"
+    if [ -x "$path" ]; then
+        report_pass "binary:$label" "$path"
+    else
+        report_fail "binary:$label" "$path missing or not executable; reinstall or check permissions"
+    fi
+}
+
+validate_xray_config() {
+    local output
+    if output=$("$XRAY_EXE" run -test -c "$XRAY_CONFIG_OUTPUT_PATH" 2>&1); then
+        report_pass "config:xray" "$XRAY_CONFIG_OUTPUT_PATH"
+    else
+        report_fail "config:xray" "$XRAY_CONFIG_OUTPUT_PATH invalid; run xray run -test for details"
+        printf '%s\n' "$output" | redact_sensitive_output | while IFS= read -r line; do
+            log_error "  $line"
+        done
+    fi
+}
+
+validate_caddy_config() {
+    local output
+    if output=$(/usr/local/bin/caddy validate --config "$CADDY_CONFIG_OUTPUT_PATH" 2>&1); then
+        report_pass "config:caddy" "$CADDY_CONFIG_OUTPUT_PATH"
+    else
+        report_fail "config:caddy" "$CADDY_CONFIG_OUTPUT_PATH invalid; run caddy validate for details"
+        printf '%s\n' "$output" | redact_sensitive_output | while IFS= read -r line; do
+            log_error "  $line"
+        done
+    fi
+}
+
+stop_pid_file_process() {
+    local pid_file="$1"
+    local expected="$2"
+    local label="$3"
+    local pid=""
+    local cmdline=""
+
+    [ -f "$pid_file" ] || return 0
+    pid=$(cat "$pid_file" 2>/dev/null || true)
+    if [[ "$pid" =~ ^[0-9]+$ ]] && ps -p "$pid" >/dev/null 2>&1; then
+        cmdline=$(ps -p "$pid" -o args= 2>/dev/null || true)
+        if [[ "$cmdline" == *"$expected"* ]]; then
+            log_info "停止旧的 $label fallback 进程 (PID: $pid)"
+            kill "$pid" 2>/dev/null || true
+        fi
+    fi
+    rm -f "$pid_file"
+}
+
+kill_matching_processes() {
+    local expected="$1"
+    local label="$2"
+    local pid=""
+    local cmdline=""
+
+    while IFS= read -r pid; do
+        [ -n "$pid" ] || continue
+        cmdline=$(ps -p "$pid" -o args= 2>/dev/null || true)
+        if [[ "$cmdline" == *"$expected"* ]]; then
+            log_info "停止旧的 $label fallback 进程 (PID: $pid)"
+            kill "$pid" 2>/dev/null || true
+        fi
+    done < <(pgrep -f "$expected" 2>/dev/null || true)
+}
+
+stop_existing_runtime() {
+    systemctl stop caddy.service xray.service 2>/dev/null || true
+    mkdir -p /var/run/xray-caddy
+    stop_pid_file_process "/var/run/xray-caddy/caddy.pid" "/usr/local/bin/caddy run --config /etc/caddy/caddy.json" "Caddy"
+    stop_pid_file_process "/var/run/xray-caddy/xray.pid" "/usr/local/bin/xray run -c /etc/xray/config.json" "Xray"
+    kill_matching_processes "/usr/local/bin/caddy run --config /etc/caddy/caddy.json" "Caddy"
+    kill_matching_processes "/usr/local/bin/xray run -c /etc/xray/config.json" "Xray"
+}
+
+write_systemd_units() {
+    cat > /etc/systemd/system/caddy.service << 'EOF'
+[Unit]
+Description=Caddy HTTP/2 web server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/local/bin/caddy run --config /etc/caddy/caddy.json
+ExecReload=/bin/kill -USR1 $MAINPID
+Restart=always
+RestartSec=10s
+LimitNOFILE=infinity
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    cat > /etc/systemd/system/xray.service << 'EOF'
+[Unit]
+Description=Xray Service
+Documentation=https://github.com/XTLS/Xray-core
+After=network.target nss-lookup.target
+
+[Service]
+User=root
+Group=root
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ExecStart=/usr/local/bin/xray run -c /etc/xray/config.json
+Restart=on-failure
+RestartSec=10s
+LimitNOFILE=infinity
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+wait_for_unit() {
+    local unit="$1"
+    local attempt
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+        if systemctl is-active --quiet "$unit"; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+check_systemd_unit() {
+    local label="$1"
+    local unit="$2"
+    local active=""
+    local enabled=""
+
+    wait_for_unit "$unit" || true
+    active=$(systemctl is-active "$unit" 2>/dev/null || true)
+    enabled=$(systemctl is-enabled "$unit" 2>/dev/null || true)
+
+    if [ "$active" = "active" ] && [ "$enabled" = "enabled" ]; then
+        report_pass "systemd:$label" "$active $enabled"
+    else
+        report_fail "systemd:$label" "active=$active enabled=$enabled; inspect journalctl -u $unit"
+        print_journal_summary "$unit"
+    fi
+}
+
+configure_systemd_services() {
+    if ! command -v systemctl >/dev/null 2>&1; then
+        report_fail "systemd" "systemctl missing; this installer requires a Debian/Ubuntu systemd VPS"
+        return 1
+    fi
+
+    stop_existing_runtime
+    write_systemd_units
+
+    if ! systemctl daemon-reload; then
+        report_fail "systemd:daemon" "daemon-reload failed; inspect systemctl status and unit files"
+        return 1
+    fi
+
+    if ! systemctl enable caddy.service xray.service >/dev/null; then
+        report_fail "systemd:enable" "enable failed; inspect systemctl status caddy.service xray.service"
+        return 1
+    fi
+
+    if ! systemctl restart caddy.service xray.service; then
+        log_warning "systemd restart 返回失败，健康报告将读取服务状态和日志。"
+    fi
+
+    check_systemd_unit "xray" "xray.service"
+    check_systemd_unit "caddy" "caddy.service"
+}
+
+listener_lines() {
+    local proto="$1"
+    local port="$2"
+    if [ "$proto" = "tcp" ]; then
+        ss -H -lntp 2>/dev/null | awk -v port="$port" '$4 ~ ":" port "$" {print}'
+    else
+        ss -H -lnup 2>/dev/null | awk -v port="$port" '$4 ~ ":" port "$" {print}'
+    fi
+}
+
+check_listener() {
+    local proto="$1"
+    local port="$2"
+    local process="$3"
+    local output=""
+
+    if ! command -v ss >/dev/null 2>&1; then
+        report_fail "listener:$proto/$port" "ss command missing; install iproute2 to verify local listeners"
+        return
+    fi
+
+    output=$(listener_lines "$proto" "$port")
+    if [ -n "$output" ] && printf '%s\n' "$output" | grep -qi "$process"; then
+        report_pass "listener:$proto/$port" "$process"
+    else
+        report_fail "listener:$proto/$port" "expected $process listener missing; check service logs and port conflicts"
+    fi
+}
+
+check_client_info_file() {
+    local file="/etc/xray/client_config_info.txt"
+    local mode=""
+
+    if [ ! -f "$file" ]; then
+        report_fail "client_info" "$file missing; rerun install to regenerate client parameters"
+        return
+    fi
+
+    mode=$(stat -c '%a' "$file" 2>/dev/null || echo "")
+    if [ -z "$mode" ] || [ $((8#$mode & 077)) -ne 0 ]; then
+        report_fail "client_info" "$file permissions are ${mode:-unknown}; run chmod 600 $file"
+        return
+    fi
+
+    if ! grep -q 'PublicKey' "$file"; then
+        report_fail "client_info" "$file lacks PublicKey; rerun install and check x25519 output"
+        return
+    fi
+
+    report_info "client_info" "$file"
+}
+
+check_external_https() {
+    local output=""
+
+    if ! command -v curl >/dev/null 2>&1; then
+        report_warn "external:https" "curl missing, skipped; check DNS/firewall/security group manually"
+        return
+    fi
+
+    if ! output=$(curl --location --max-time 5 --silent --show-error --output /dev/null --write-out '%{http_code}' "https://$DOMAIN/" 2>&1); then
+        report_warn "external:https" "$output; check DNS/firewall/security group/certificate issuance"
+        return
+    fi
+
+    case "$output" in
+        2*|3*)
+            report_pass "external:https" "HTTP $output"
+            ;;
+        *)
+            report_warn "external:https" "HTTP $output; check DNS/firewall/security group/certificate issuance"
+            ;;
+    esac
+}
+
+run_install_health_checks() {
+    log_info "正在执行安装健康检查..."
+    HEALTH_FAILURES=0
+    HEALTH_WARNINGS=0
+    HEALTH_REPORT_STARTED=0
+
+    require_executable "xray" "$XRAY_EXE"
+    require_executable "caddy" "/usr/local/bin/caddy"
+    validate_xray_config
+    validate_caddy_config
+
+    if [ "$HEALTH_FAILURES" -gt 0 ]; then
+        emit_health_result
+        return 1
+    fi
+
+    configure_systemd_services || true
+    check_listener "tcp" "80" "caddy"
+    check_listener "tcp" "443" "xray"
+    check_listener "udp" "443" "caddy"
+    check_listener "udp" "2052" "xray"
+    check_external_https
+    check_client_info_file
+    emit_health_result
+
+    [ "$HEALTH_FAILURES" -eq 0 ]
+}
+
 # --- Cleanup function for temporary files ---
 cleanup_temp_files() {
     if [ -d "./app/temp" ]; then
@@ -234,9 +577,11 @@ log_info "UUID 生成完成（出于安全考虑不显示具体值）"
 
 # --- 5. Generate Private/Public Keys for Xray ---
 log_info "正在生成 Xray X25519 密钥对..."
-# 捕获命令执行的完整输出和错误信息
-KEY_OUTPUT=$("$XRAY_EXE" x25519 2>&1)
-KEY_EXIT_CODE=$?
+if KEY_OUTPUT=$("$XRAY_EXE" x25519 2>&1); then
+    KEY_EXIT_CODE=0
+else
+    KEY_EXIT_CODE=$?
+fi
 
 if [ $KEY_EXIT_CODE -ne 0 ]; then
     log_error "Xray x25519 命令执行失败，退出码: $KEY_EXIT_CODE"
@@ -246,24 +591,47 @@ if [ $KEY_EXIT_CODE -ne 0 ]; then
     exit 1
 fi
 
-log_info "X25519 密钥对生成完成（出于安全考虑不显示具体值）"
+log_info "X25519 命令执行完成，正在解析输出..."
 
-# Xray 不同版本的 x25519 命令输出格式可能不同
-# 旧版本格式: "Private key:" 和 "Public key:"
-# 新版本格式: "PrivateKey:" 和 "Password:" (其中 Password 是公钥)
-PRIVATE_KEY=$(echo "$KEY_OUTPUT" | grep -E "(Private key:|PrivateKey:)" | awk '{print $NF}')
-PUBLIC_KEY=$(echo "$KEY_OUTPUT" | grep -E "(Public key:|Password:)" | awk '{print $NF}')
+extract_x25519_value() {
+    local key_type="$1"
+    local raw_output="$2"
+    printf '%s\n' "$raw_output" | awk -F ':' -v key_type="$key_type" '
+        {
+            label = tolower($1)
+            gsub(/[[:space:]]+/, "", label)
+        }
+        key_type == "private" && label == "privatekey" {
+            sub(/^[^:]*:[[:space:]]*/, "")
+            print
+            exit
+        }
+        key_type == "public" && (label == "publickey" || label == "password" || label == "password(publickey)") {
+            sub(/^[^:]*:[[:space:]]*/, "")
+            print
+            exit
+        }
+    '
+}
+
+PRIVATE_KEY=$(extract_x25519_value private "$KEY_OUTPUT" || true)
+PUBLIC_KEY=$(extract_x25519_value public "$KEY_OUTPUT" || true)
 
 # 检查是否成功提取了密钥
 if [ -z "$PRIVATE_KEY" ] || [ -z "$PUBLIC_KEY" ]; then
     log_error "无法从命令输出中提取密钥。"
-    log_error "命令输出: $KEY_OUTPUT"
-    log_error "尝试直接执行命令以查看详细输出:"
-    "$XRAY_EXE" x25519
+    log_error "命令输出标签如下（已隐藏密钥值）:"
+    printf '%s\n' "$KEY_OUTPUT" | while IFS= read -r line; do
+        if [[ "$line" == *:* ]]; then
+            log_error "  ${line%%:*}: <hidden>"
+        else
+            log_error "  <non key-value output hidden>"
+        fi
+    done
     exit 1
 fi
 
-log_info "X25519 密钥对生成完成（公钥将在安装完成后显示）"
+log_info "X25519 密钥对生成完成，客户端参数将保存到 /etc/xray/client_config_info.txt"
 
 # --- 7. Configure Xray-core ---
 log_info "正在配置 Xray-core (config.json)..."
@@ -341,7 +709,12 @@ ln -sf "$CURRENT_SCRIPT_DIR/main.sh" /usr/local/bin/xraycaddy
 chmod +x /usr/local/bin/xraycaddy
 log_info "快捷命令 'xraycaddy' 已创建完成"
 
-# 注意：临时文件清理由 EXIT trap 自动处理（见第 41 行）
+if ! run_install_health_checks; then
+    log_error "安装健康检查失败，请按报告中的 FAIL 项处理。"
+    exit 1
+fi
+
+# 注意：临时文件清理由 EXIT trap 自动处理
 
 log_info "---------------------------------------------------------------------"
 log_info "安装和配置完成!"
@@ -363,8 +736,8 @@ log_info "  配置信息: /etc/xray/config_info.txt"
 log_info "  客户端信息: /etc/xray/client_config_info.txt"
 log_info ""
 log_info "快捷命令:"
-log_info "  管理服务: xraycaddy (显示菜单)"
-log_info "  启动服务: xraycaddy start"
+log_info "  管理菜单: xraycaddy"
+log_info "  systemd 状态: systemctl status caddy.service xray.service"
 log_info ""
 log_info "⚠️  重要提醒:"
 log_info "  - 所有敏感配置信息已保存到 /etc/xray/ 目录"

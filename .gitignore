@@ -3,3 +3,4 @@ www
 /.claude
 /.spec-workflow
 backups
+.gstack/

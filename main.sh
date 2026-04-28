@@ -242,6 +242,30 @@ validate_path() {
     fi
 }
 
+systemd_units_ready() {
+    command -v systemctl >/dev/null 2>&1 \
+        && [ -f "/etc/systemd/system/caddy.service" ] \
+        && [ -f "/etc/systemd/system/xray.service" ]
+}
+
+manage_services() {
+    local action="$1"
+    if systemd_units_ready; then
+        systemctl "$action" caddy.service xray.service
+    else
+        log_warning "未找到 systemd unit，使用 service.sh 手动 fallback。"
+        bash "$SCRIPT_DIR/service.sh" "$action"
+    fi
+}
+
+show_systemd_status() {
+    systemctl status caddy.service xray.service --no-pager || true
+}
+
+escape_sed_replacement() {
+    printf '%s' "$1" | sed 's/[&|\\]/\\&/g'
+}
+
 # 主菜单函数
 show_menu() {
     echo "----------------------------------------"
@@ -295,15 +319,8 @@ show_menu() {
                 fi
             fi
 
-            # 询问是否立即启动服务
-            read -r -p "安装已完成，是否立即启动服务? [Y/n]: " start_service
-            start_service=${start_service:-Y}
-            if [[ $start_service =~ ^[Yy]$ ]]; then
-                echo "正在启动服务..."
-                bash "$SCRIPT_DIR/service.sh" start
-            else
-                echo "服务未启动，您可以稍后使用 'bash "$SCRIPT_DIR/service.sh" start' 命令启动服务。"
-            fi
+            echo "安装已完成，服务已由 systemd 托管并完成健康检查。"
+            echo "客户端参数: xraycaddy -> 6，或查看 /etc/xray/client_config_info.txt"
             read -r -p "按回车键继续..."
             ;;
         2)
@@ -348,13 +365,20 @@ show_menu() {
                 echo "正在更新配置并重启服务..."
                 # 调用安装脚本进行配置更新
                 if [[ "$cert_type" == "existing" ]]; then
-                    bash "$SCRIPT_DIR/install.sh" "$domain" "$kcp_seed" "$www_root" "$cert_type" "$cert_path" "$key_path" "$email"
+                    if ! bash "$SCRIPT_DIR/install.sh" "$domain" "$kcp_seed" "$www_root" "$cert_type" "$cert_path" "$key_path" "$email"; then
+                        log_error "配置更新失败，请检查上述错误信息。"
+                        read -r -p "按回车键继续..."
+                        return 1
+                    fi
                 else
-                    bash "$SCRIPT_DIR/install.sh" "$domain" "$kcp_seed" "$www_root" "$cert_type" "" "" "$email"
+                    if ! bash "$SCRIPT_DIR/install.sh" "$domain" "$kcp_seed" "$www_root" "$cert_type" "" "" "$email"; then
+                        log_error "配置更新失败，请检查上述错误信息。"
+                        read -r -p "按回车键继续..."
+                        return 1
+                    fi
                 fi
-                # 重启服务
-                bash "$SCRIPT_DIR/service.sh" restart
-                echo "配置已更新，服务已重启。"
+                echo "配置已更新，服务已由 systemd 重启并完成健康检查。"
+                echo "客户端参数: xraycaddy -> 6，或查看 /etc/xray/client_config_info.txt"
             else
                 echo "操作已取消。"
             fi
@@ -362,14 +386,20 @@ show_menu() {
             ;;
         3)
             echo "正在重启服务..."
-            # 调用service.sh脚本重启服务
-            bash "$SCRIPT_DIR/service.sh" restart
+            if manage_services restart; then
+                echo "服务已重启。"
+            else
+                echo "服务重启失败，请检查上方错误信息。"
+            fi
             read -r -p "按回车键继续..."
             ;;
         4)
             echo "正在停止服务..."
-            # 调用service.sh脚本停止服务
-            bash "$SCRIPT_DIR/service.sh" stop
+            if manage_services stop; then
+                echo "服务已停止。"
+            else
+                echo "服务停止失败，请检查上方错误信息。"
+            fi
             read -r -p "按回车键继续..."
             ;;
         5)
@@ -395,12 +425,17 @@ show_menu() {
 
             # 从模板生成配置文件，替换所有占位符
             if [ -f "$CURRENT_DIR/cfg_tpl/xray_client.config.json" ]; then
-                # 使用sed替换配置文件中的所有变量
-                sed -e "s|\${DOMAIN}|$DOMAIN|g" \
-                    -e "s|\${UUID}|$UUID|g" \
-                    -e "s|\${EMAIL}|${EMAIL:-admin@$DOMAIN}|g" \
-                    -e "s|\${PUBLIC_KEY}|$PUBLIC_KEY|g" \
-                    -e "s|\${KCP_SEED}|$KCP_SEED|g" \
+                escaped_domain=$(escape_sed_replacement "$DOMAIN")
+                escaped_uuid=$(escape_sed_replacement "$UUID")
+                escaped_email=$(escape_sed_replacement "${EMAIL:-admin@$DOMAIN}")
+                escaped_public_key=$(escape_sed_replacement "$PUBLIC_KEY")
+                escaped_kcp_seed=$(escape_sed_replacement "$KCP_SEED")
+
+                sed -e "s|\${DOMAIN}|$escaped_domain|g" \
+                    -e "s|\${UUID}|$escaped_uuid|g" \
+                    -e "s|\${EMAIL}|$escaped_email|g" \
+                    -e "s|\${PUBLIC_KEY}|$escaped_public_key|g" \
+                    -e "s|\${KCP_SEED}|$escaped_kcp_seed|g" \
                     "$CURRENT_DIR/cfg_tpl/xray_client.config.json" > "./app/xray_client_config.json"
 
                 echo "客户端配置文件已生成: ./app/xray_client_config.json"
@@ -493,80 +528,43 @@ show_menu() {
             read -r -p "按回车键继续..."
             ;;
         9)
-            echo "正在准备设为开机自启服务..."
+            echo "正在修复 systemd 开机自启服务..."
 
-            # 确保systemd可用
             if ! command -v systemctl &> /dev/null; then
-                echo "错误：systemd不可用，无法设置开机自启。"
+                echo "错误：systemd 不可用，当前安装闭环仅支持常规 Debian/Ubuntu systemd VPS。"
                 read -r -p "按回车键继续..."
                 return
             fi
 
-            # 检查程序是否存在
             if [ ! -f "/usr/local/bin/caddy" ] || [ ! -f "/usr/local/bin/xray" ]; then
                 echo "错误：Xray 或 Caddy 未安装，请先安装服务。"
                 read -r -p "按回车键继续..."
                 return
             fi
 
-            # 创建caddy.service文件
-            cat > /etc/systemd/system/caddy.service << EOF
-[Unit]
-Description=Caddy HTTP/2 web server
-After=network-online.target
-Wants=network-online.target systemd-networkd-wait-online.service
+            if ! systemd_units_ready; then
+                echo "错误：未找到 systemd unit，请重新运行安装流程生成并验证服务配置。"
+                read -r -p "按回车键继续..."
+                return
+            fi
 
-[Service]
-Type=simple
-User=root
-Group=root
-ExecStart=/usr/local/bin/caddy run --config /etc/caddy/caddy.json
-ExecReload=/bin/kill -USR1 \$MAINPID
-Restart=always
-RestartSec=10s
-LimitNOFILE=4096
+            if ! systemctl daemon-reload; then
+                echo "错误：systemd 配置重载失败，请检查 unit 文件。"
+                read -r -p "按回车键继续..."
+                return 1
+            fi
+            if ! systemctl enable caddy.service xray.service; then
+                echo "错误：设置开机自启失败，请检查 systemd 状态。"
+                read -r -p "按回车键继续..."
+                return 1
+            fi
+            if systemctl restart caddy.service xray.service; then
+                echo "服务已设置为开机自启并重新启动。"
+            else
+                echo "服务启动失败，请查看 systemd 状态和日志。"
+            fi
 
-[Install]
-WantedBy=multi-user.target
-EOF
-
-            # 创建xray.service文件
-            cat > /etc/systemd/system/xray.service << EOF
-[Unit]
-Description=Xray Service
-Documentation=https://github.com/XTLS/Xray-core
-After=network.target nss-lookup.target
-
-[Service]
-User=root
-Group=root
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-NoNewPrivileges=true
-ExecStart=/usr/local/bin/xray run -c /etc/xray/config.json
-Restart=on-failure
-RestartSec=10s
-LimitNOFILE=infinity
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-            # 重新加载systemd配置
-            systemctl daemon-reload
-
-            # 启用服务开机自启
-            systemctl enable caddy.service
-            systemctl enable xray.service
-
-            # 确认系统服务已创建并启动
-            echo "系统服务已创建完成。"
-            echo "Caddy 服务状态："
-            systemctl status caddy.service --no-pager || true
-            echo "Xray 服务状态："
-            systemctl status xray.service --no-pager || true
-
-            echo "服务已设置为开机自启，并已启动。"
+            show_systemd_status
             echo "你可以使用以下命令管理服务："
             echo "  启动服务: systemctl start caddy.service xray.service"
             echo "  停止服务: systemctl stop caddy.service xray.service"
