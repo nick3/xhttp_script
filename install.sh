@@ -76,7 +76,7 @@ redact_sensitive_output() {
     text=$(cat)
     for secret in "${PRIVATE_KEY:-}" "${PUBLIC_KEY:-}" "${UUID:-}" "${KCP_SEED:-}"; do
         if [ -n "$secret" ]; then
-            text="${text//$secret/<hidden>}"
+            text="${text//"$secret"/<hidden>}"
         fi
     done
     printf '%s\n' "$text"
@@ -183,7 +183,7 @@ ExecStart=/usr/local/bin/caddy run --config /etc/caddy/caddy.json
 ExecReload=/bin/kill -USR1 $MAINPID
 Restart=always
 RestartSec=10s
-LimitNOFILE=4096
+LimitNOFILE=infinity
 
 [Install]
 WantedBy=multi-user.target
@@ -328,11 +328,19 @@ check_external_https() {
         return
     fi
 
-    if output=$(curl --max-time 5 --silent --show-error --output /dev/null --write-out '%{http_code}' "https://$DOMAIN/" 2>&1); then
-        report_pass "external:https" "HTTP $output"
-    else
+    if ! output=$(curl --location --max-time 5 --silent --show-error --output /dev/null --write-out '%{http_code}' "https://$DOMAIN/" 2>&1); then
         report_warn "external:https" "$output; check DNS/firewall/security group/certificate issuance"
+        return
     fi
+
+    case "$output" in
+        2*|3*)
+            report_pass "external:https" "HTTP $output"
+            ;;
+        *)
+            report_warn "external:https" "HTTP $output; check DNS/firewall/security group/certificate issuance"
+            ;;
+    esac
 }
 
 run_install_health_checks() {

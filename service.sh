@@ -122,10 +122,19 @@ start_services() {
         log_error "Caddy 和 Xray-core 服务似乎都启动失败了。请检查上面的日志。"
     fi
 
-    # 将PID保存到文件中，便于后续管理
+    # 仅保存仍存活的 fallback PID，避免后续误杀复用 PID 的无关进程
     mkdir -p /var/run/xray-caddy
-    echo "$CADDY_PID" > /var/run/xray-caddy/caddy.pid
-    echo "$XRAY_PID" > /var/run/xray-caddy/xray.pid
+    if ps -p "$CADDY_PID" > /dev/null 2>&1; then
+        echo "$CADDY_PID" > /var/run/xray-caddy/caddy.pid
+    else
+        rm -f /var/run/xray-caddy/caddy.pid
+    fi
+
+    if ps -p "$XRAY_PID" > /dev/null 2>&1; then
+        echo "$XRAY_PID" > /var/run/xray-caddy/xray.pid
+    else
+        rm -f /var/run/xray-caddy/xray.pid
+    fi
 
     log_info ""
     log_info "服务日志:"
