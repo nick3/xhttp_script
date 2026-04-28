@@ -93,8 +93,17 @@
           "downlinkCapacity": 100,
           "congestion": false,
           "readBufferSize": 2,
-          "writeBufferSize": 2,
-          "seed": "${KCP_SEED}"
+          "writeBufferSize": 2
+        },
+        "finalmask": {
+          "udp": [
+            {
+              "type": "mkcp-aes128gcm",
+              "settings": {
+                "password": "${KCP_SEED}"
+              }
+            }
+          ]
         }
       },
       "sniffing": {

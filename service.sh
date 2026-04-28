@@ -20,6 +20,9 @@ log_warning() {
 
 # --- Function to Start Services ---
 start_services() {
+    local start_failures=0
+    log_warning "service.sh 仅用于手动 debug/fallback；默认长期运行路径由 systemd 托管。"
+
     # Check if services are already installed
     if [ ! -f "/usr/local/bin/caddy" ] || [ ! -f "/usr/local/bin/xray" ]; then
         log_error "Xray 或 Caddy 未安装。请先运行安装脚本。"
@@ -47,11 +50,12 @@ start_services() {
     sleep 3 # Give it a moment to start or fail
 
     if ps -p $CADDY_PID > /dev/null; then
-       log_info "Caddy 服务已启动 (PID: $CADDY_PID)。日志文件: $CADDY_LOG_FILE"
+       log_info "Caddy fallback 进程已启动 (PID: $CADDY_PID)。日志文件: $CADDY_LOG_FILE"
     else
-       log_error "Caddy 服务启动失败。请检查日志: $CADDY_LOG_FILE"
+       log_error "Caddy fallback 进程启动失败。请检查日志: $CADDY_LOG_FILE"
        log_error "尝试查看 Caddy 日志尾部:"
        tail -n 20 "$CADDY_LOG_FILE" || true
+       start_failures=$((start_failures + 1))
     fi
 
     # --- Start Xray-core Service ---
@@ -82,9 +86,8 @@ start_services() {
         log_info "Xray 可执行文件权限: $(stat -c%a "$XRAY_EXE")"
     else
         log_error "Xray 可执行文件不存在: $XRAY_EXE"
-        log_error "无法启动 Xray 服务，缺少可执行文件。"
-        # 即使 Xray 启动失败，也要继续启动 Caddy 服务
-        return 0  # 返回成功代码，继续执行
+        log_error "无法启动 Xray fallback 进程，缺少可执行文件。"
+        return 1
     fi
 
     log_info "正在启动 Xray-core 服务... 日志将输出到 $XRAY_LOG_FILE"
@@ -97,11 +100,12 @@ start_services() {
     sleep 3 # Give it a moment to start or fail
 
     if ps -p $XRAY_PID > /dev/null; then
-       log_info "Xray-core 服务已启动 (PID: $XRAY_PID)。日志文件: $XRAY_LOG_FILE"
+       log_info "Xray-core fallback 进程已启动 (PID: $XRAY_PID)。日志文件: $XRAY_LOG_FILE"
     else
-       log_error "Xray-core 服务启动失败。请检查日志: $XRAY_LOG_FILE"
+       log_error "Xray-core fallback 进程启动失败。请检查日志: $XRAY_LOG_FILE"
        log_error "尝试查看 Xray 日志尾部:"
        tail -n 20 "$XRAY_LOG_FILE" || true
+       start_failures=$((start_failures + 1))
     fi
 
     # --- Show service status summary ---
@@ -131,9 +135,13 @@ start_services() {
     log_info "管理服务 (示例):"
     log_info "  要停止服务: bash service.sh stop"
     log_info "  要重启服务: bash service.sh restart"
-    log_info "  要查看状态: bash service.sh status"
-    log_info "  为确保服务稳定运行和开机自启，强烈建议将它们配置为 systemd 服务。"
+    log_info "  要查看 fallback 状态: bash service.sh status"
+    log_info "  默认长期运行请使用: systemctl status caddy.service xray.service"
     log_info "---------------------------------------------------------------------"
+
+    if [ "$start_failures" -gt 0 ]; then
+        return 1
+    fi
 }
 
 # --- Function to Stop Services ---
@@ -272,7 +280,7 @@ check_status() {
 
 # --- Main script logic ---
 if [ $# -eq 0 ]; then
-    # 默认操作是启动服务
+    # 默认操作是启动手动 fallback 进程
     start_services
 else
     # 根据命令行参数执行不同操作
@@ -291,11 +299,11 @@ else
             ;;
         *)
             echo "用法: $0 [start|stop|restart|status]"
-            echo "  默认 (无参数): 启动服务"
-            echo "  start:   启动 Caddy 和 Xray-core 服务"
-            echo "  stop:    停止 Caddy 和 Xray-core 服务"
-            echo "  restart: 重启 Caddy 和 Xray-core 服务"
-            echo "  status:  显示 Caddy 和 Xray-core 服务的状态"
+            echo "  默认 (无参数): 启动手动 fallback 进程"
+            echo "  start:   启动 Caddy 和 Xray-core fallback 进程"
+            echo "  stop:    停止 Caddy 和 Xray-core fallback 进程"
+            echo "  restart: 重启 Caddy 和 Xray-core fallback 进程"
+            echo "  status:  显示 fallback 进程状态"
             exit 1
             ;;
     esac
