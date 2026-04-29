@@ -211,6 +211,155 @@ edit_config() {
     fi
 }
 
+select_install_profile() {
+    echo "请选择安装 profile:"
+    echo "1. xraycaddy - Xray + Caddy"
+    echo "2. hysteria2 - Hysteria2"
+    echo "3. all - Xray + Caddy + Hysteria2"
+    read -r -p "请输入选项 [1-3] (默认为1): " profile_choice
+    profile_choice=${profile_choice:-1}
+
+    case "$profile_choice" in
+        1) install_profile="xraycaddy" ;;
+        2) install_profile="hysteria2" ;;
+        3) install_profile="all" ;;
+        *)
+            echo "错误: 无效安装 profile 选项: $profile_choice"
+            read -r -p "按回车键继续..."
+            return 1
+            ;;
+    esac
+}
+
+validate_port_range_input() {
+    local range="$1"
+    local profile="${2:-${install_profile:-}}"
+    local start
+    local end
+
+    if [[ ! "$range" =~ ^[0-9]+-[0-9]+$ ]]; then
+        echo "错误: 端口范围格式无效，应为 start-end，例如 20000-40000"
+        return 1
+    fi
+
+    start="${range%-*}"
+    end="${range#*-}"
+
+    if [ "$start" -lt 1 ] || [ "$start" -gt 65535 ] || [ "$end" -lt 1 ] || [ "$end" -gt 65535 ] || [ "$start" -gt "$end" ]; then
+        echo "错误: 端口范围无效: $range"
+        return 1
+    fi
+
+    if [ "$start" -le 443 ] && [ "$end" -ge 443 ]; then
+        echo "错误: 端口跳跃范围不能包含 UDP/443，该端口保留给 XHTTP/Caddy。"
+        return 1
+    fi
+
+    if [ "$profile" = "all" ] && [ "$start" -le 2052 ] && [ "$end" -ge 2052 ]; then
+        echo "错误: all profile 的端口跳跃范围不能包含 UDP/2052，该端口保留给 Xray KCP。"
+        return 1
+    fi
+
+    return 0
+}
+
+validate_duration_interval_input() {
+    local value="$1"
+
+    if [[ ! "$value" =~ ^([0-9]+(ms|s|m|h))+$ ]]; then
+        echo "错误: 端口跳跃间隔格式无效，应为 30s、5m 或 1h"
+        return 1
+    fi
+
+    return 0
+}
+
+edit_hysteria2_base_config() {
+    read -r -p "请输入域名: " domain
+    echo "请选择证书方式:"
+    echo "1. 使用现有证书文件 (推荐)"
+    echo "2. 使用 Hysteria2 ACME 自动申请证书"
+    read -r -p "请输入选项 [1-2] (默认为1): " cert_choice
+    cert_choice=${cert_choice:-1}
+
+    if [[ "$cert_choice" == "2" ]]; then
+        cert_type="hysteria-acme"
+        cert_path=""
+        key_path=""
+        read -r -p "请输入邮箱地址(用于 ACME，可选): " email
+    else
+        cert_type="existing"
+        read -r -p "请输入证书文件路径 (.crt/.pem): " cert_path
+        read -r -p "请输入私钥文件路径 (.key): " key_path
+    fi
+}
+
+edit_hysteria2_config() {
+    read -r -p "请输入 Hysteria2 认证密码: " hysteria_auth
+    read -r -p "请输入 Hysteria2 masquerade proxy URL: " hysteria_masquerade_proxy_url
+    read -r -p "请输入 Hysteria2 UDP 监听端口 (默认 8443，不能为 443): " hysteria_port
+    hysteria_port=${hysteria_port:-8443}
+
+    if [ "$hysteria_port" = "443" ]; then
+        echo "错误: Hysteria2 不能使用 UDP/443，该端口保留给 XHTTP/Caddy。"
+        read -r -p "按回车键继续..."
+        return 1
+    fi
+
+    read -r -p "是否开启 Hysteria2 端口跳跃？ [y/N]: " hysteria_port_hopping_choice
+    hysteria_port_hopping_choice=${hysteria_port_hopping_choice:-N}
+    hysteria_port_hopping_enabled="false"
+    hysteria_port_hopping_range=""
+    hysteria_port_hopping_interval="30s"
+
+    if [[ "$hysteria_port_hopping_choice" =~ ^[Yy]$ ]]; then
+        hysteria_port_hopping_enabled="true"
+        read -r -p "请输入端口跳跃范围 (例如 20000-40000，不能包含 443): " hysteria_port_hopping_range
+        validate_port_range_input "$hysteria_port_hopping_range" "$install_profile" || {
+            read -r -p "按回车键继续..."
+            return 1
+        }
+        read -r -p "请输入端口跳跃间隔 (默认 30s): " hysteria_port_hopping_interval
+        hysteria_port_hopping_interval=${hysteria_port_hopping_interval:-30s}
+        validate_duration_interval_input "$hysteria_port_hopping_interval" || {
+            read -r -p "按回车键继续..."
+            return 1
+        }
+    fi
+}
+
+run_install_from_wizard() {
+    local install_args=(--profile "$install_profile" --domain "$domain")
+
+    if [[ "$install_profile" == "xraycaddy" || "$install_profile" == "all" ]]; then
+        install_args+=(--kcp-seed "$kcp_seed" --www-root "$www_root")
+    fi
+
+    install_args+=(--cert-mode "$cert_type")
+    if [[ "$cert_type" == "existing" ]]; then
+        install_args+=(--cert-path "$cert_path" --key-path "$key_path")
+    fi
+    [ -n "${email:-}" ] && install_args+=(--email "$email")
+
+    if [[ "$install_profile" == "hysteria2" || "$install_profile" == "all" ]]; then
+        install_args+=(
+            --hysteria-port "$hysteria_port"
+            --hysteria-auth "$hysteria_auth"
+            --hysteria-masquerade-proxy-url "$hysteria_masquerade_proxy_url"
+        )
+
+        if [ "$hysteria_port_hopping_enabled" = "true" ]; then
+            install_args+=(
+                --hysteria-port-hopping
+                --hysteria-port-hopping-range "$hysteria_port_hopping_range"
+                --hysteria-port-hopping-interval "$hysteria_port_hopping_interval"
+            )
+        fi
+    fi
+
+    bash "$SCRIPT_DIR/install.sh" "${install_args[@]}"
+}
+
 # 验证域名格式
 validate_domain() {
     local domain="$1"
@@ -272,7 +421,7 @@ show_menu() {
     echo " Xray & Caddy 服务管理脚本"
     echo "----------------------------------------"
     echo "请选择要执行的操作:"
-    echo "1. 安装本服务 (xray 与 caddy)"
+    echo "1. 安装服务 (xraycaddy / hysteria2 / all)"
     echo "2. 修改配置并重启服务"
     echo "3. 重启服务"
     echo "4. 停止服务"
@@ -289,8 +438,22 @@ show_menu() {
     case $choice in
         1)
             echo "正在准备安装服务..."
-            # 收集用户输入的配置项
-            edit_config
+            select_install_profile || return 1
+
+            if [[ "$install_profile" == "hysteria2" ]]; then
+                edit_hysteria2_base_config || return 1
+            else
+                edit_config || return 1
+                if [[ "$install_profile" == "all" && "$cert_type" != "existing" ]]; then
+                    echo "错误: all profile 必须使用现有证书，避免 Caddy 与 Hysteria2 同时申请 ACME 证书。"
+                    read -r -p "按回车键继续..."
+                    return 1
+                fi
+            fi
+
+            if [[ "$install_profile" == "hysteria2" || "$install_profile" == "all" ]]; then
+                edit_hysteria2_config || return 1
+            fi
 
             # 对用户输入进行验证
             if [ -z "$domain" ] || ! validate_domain "$domain"; then
@@ -298,25 +461,18 @@ show_menu() {
                 read -r -p "按回车键继续..."
                 return 1
             fi
-            if [ -z "$www_root" ] || ! validate_path "$www_root"; then
-                echo "错误: 路径验证失败。"
-                read -r -p "按回车键继续..."
-                return 1
+            if [[ "$install_profile" == "xraycaddy" || "$install_profile" == "all" ]]; then
+                if [ -z "$www_root" ] || ! validate_path "$www_root"; then
+                    echo "错误: 路径验证失败。"
+                    read -r -p "按回车键继续..."
+                    return 1
+                fi
             fi
 
-            # 执行安装服务脚本 install.sh
-            if [[ "$cert_type" == "existing" ]]; then
-                if ! bash "$SCRIPT_DIR/install.sh" "$domain" "$kcp_seed" "$www_root" "$cert_type" "$cert_path" "$key_path" "$email"; then
-                    log_error "安装过程失败，请检查上述错误信息。"
-                    read -r -p "按回车键继续..."
-                    return 1
-                fi
-            else
-                if ! bash "$SCRIPT_DIR/install.sh" "$domain" "$kcp_seed" "$www_root" "$cert_type" "" "" "$email"; then
-                    log_error "安装过程失败，请检查上述错误信息。"
-                    read -r -p "按回车键继续..."
-                    return 1
-                fi
+            if ! run_install_from_wizard; then
+                log_error "安装过程失败，请检查上述错误信息。"
+                read -r -p "按回车键继续..."
+                return 1
             fi
 
             echo "安装已完成，服务已由 systemd 托管并完成健康检查。"

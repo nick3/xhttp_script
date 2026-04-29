@@ -1,8 +1,4 @@
 #!/bin/bash
-
-# Exit immediately if a command exits with a non-zero status.
-# Treat unset variables as an error when substituting.
-# Prevent errors in a pipeline from being masked.
 set -euo pipefail
 
 # --- Helper Functions ---
@@ -35,7 +31,7 @@ download_caddy() {
     fi
     
     CADDY_REPO_NAME="lxhao61/integrated-examples"
-    CADDY_TMP_ARCHIVE="caddy-linux-amd64.tar.gz" # This is the asset name and local filename
+    CADDY_TMP_ARCHIVE="caddy-linux-amd64.tar.gz"
 
     log_info "使用 dra 从 ${CADDY_REPO_NAME} 下载 ${CADDY_TMP_ARCHIVE}..."
     if "$DRA_CMD" download --select "${CADDY_TMP_ARCHIVE}" "${CADDY_REPO_NAME}"; then
@@ -102,7 +98,6 @@ download_xray() {
     
     XRAY_REPO_NAME="XTLS/Xray-core"
     XRAY_ASSET_FILENAME="Xray-linux-64.zip"
-    XRAY_TMP_ARCHIVE="${XRAY_ASSET_FILENAME}" # Local filename where dra will save it
 
     log_info "使用 dra 从 ${XRAY_REPO_NAME} 下载最新的 ${XRAY_ASSET_FILENAME}..."
     if "$DRA_CMD" download --select "${XRAY_ASSET_FILENAME}" "${XRAY_REPO_NAME}"; then
@@ -117,29 +112,122 @@ download_xray() {
     fi
 
     log_info "正在解压 Xray-core 到 $output_dir..."
-    # -o option overwrites files without prompting
-    if unzip -o "$XRAY_TMP_ARCHIVE" -d "$output_dir"; then
+    if unzip -o "$XRAY_ASSET_FILENAME" -d "$output_dir"; then
         log_info "Xray-core 解压成功。"
     else
         log_error "Xray-core 解压失败。"
-        rm "$XRAY_TMP_ARCHIVE"
+        rm "$XRAY_ASSET_FILENAME"
         return 1
     fi
 
     # Ensure xray binary exists and set permissions
-    XRAY_EXE="$output_dir/xray"
-    if [ ! -f "$XRAY_EXE" ]; then
-        log_error "Xray 可执行文件未找到: $XRAY_EXE。请检查归档文件内容。"
-        rm "$XRAY_TMP_ARCHIVE"
+    if [ ! -f "$output_dir/xray" ]; then
+        log_error "Xray 可执行文件未找到: $output_dir/xray。请检查归档文件内容。"
+        rm "$XRAY_ASSET_FILENAME"
         return 1
     fi
-    chmod +x "$XRAY_EXE"
-    # Also set permissions for geosite.dat and geoip.dat if they exist
+    chmod +x "$output_dir/xray"
     [ -f "$output_dir/geosite.dat" ] && chmod +r "$output_dir/geosite.dat"
     [ -f "$output_dir/geoip.dat" ] && chmod +r "$output_dir/geoip.dat"
 
-    rm "$XRAY_TMP_ARCHIVE"
+    rm "$XRAY_ASSET_FILENAME"
     log_info "Xray-core 安装并设置可执行权限完成。"
+    return 0
+}
+
+# --- Function to calculate sha256 ---
+sha256_file() {
+    local file="$1"
+    local hash
+
+    if command -v sha256sum &> /dev/null; then
+        read -r hash _ < <(sha256sum "$file")
+    elif command -v shasum &> /dev/null; then
+        read -r hash _ < <(shasum -a 256 "$file")
+    else
+        log_error "sha256sum 或 shasum 命令未找到，无法校验 Hysteria2。"
+        return 1
+    fi
+
+    printf '%s\n' "$hash"
+}
+
+# --- Function to download Hysteria2 ---
+download_hysteria2() {
+    local force_download="${1:-false}"
+    local output_dir="${2:-./app/hysteria}"
+    local repo_name="apernet/hysteria"
+    local asset_filename="hysteria-linux-amd64"
+    local hashes_filename="hashes.txt"
+    local expected_hash=""
+    local actual_hash
+    local hash_value
+    local hash_path
+
+    log_info "开始下载 Hysteria2..."
+    mkdir -p "$output_dir"
+
+    if [ "$force_download" = "false" ] && [ -f "$output_dir/hysteria" ]; then
+        log_info "Hysteria2 已存在，跳过下载。使用 --force 参数强制重新下载。"
+        return 0
+    fi
+
+    rm -f "$asset_filename" "$hashes_filename"
+
+    log_info "使用 dra 从 ${repo_name} 下载 ${asset_filename}..."
+    if ! "$DRA_CMD" download --select "$asset_filename" "$repo_name"; then
+        log_error "使用 dra 下载 Hysteria2 (${asset_filename}) 失败。仓库: ${repo_name}"
+        rm -f "$asset_filename" "$hashes_filename"
+        return 1
+    fi
+
+    if [ ! -f "$asset_filename" ]; then
+        log_error "dra报告下载成功，但在当前目录未找到文件: ${asset_filename}"
+        rm -f "$asset_filename" "$hashes_filename"
+        return 1
+    fi
+
+    log_info "使用 dra 从 ${repo_name} 下载 ${hashes_filename}..."
+    if ! "$DRA_CMD" download --select "$hashes_filename" "$repo_name"; then
+        log_error "使用 dra 下载 Hysteria2 校验文件 (${hashes_filename}) 失败。"
+        rm -f "$asset_filename" "$hashes_filename"
+        return 1
+    fi
+
+    if [ ! -f "$hashes_filename" ]; then
+        log_error "dra报告下载成功，但在当前目录未找到文件: ${hashes_filename}"
+        rm -f "$asset_filename" "$hashes_filename"
+        return 1
+    fi
+
+    while read -r hash_value hash_path _; do
+        if [ "$hash_path" = "build/${asset_filename}" ] || [ "$hash_path" = "$asset_filename" ]; then
+            expected_hash="$hash_value"
+            break
+        fi
+    done < "$hashes_filename"
+
+    if [ -z "$expected_hash" ]; then
+        log_error "${hashes_filename} 中未找到 ${asset_filename} 的 sha256。"
+        rm -f "$asset_filename" "$hashes_filename"
+        return 1
+    fi
+
+    if ! actual_hash=$(sha256_file "$asset_filename"); then
+        rm -f "$asset_filename" "$hashes_filename"
+        return 1
+    fi
+
+    if [ "$actual_hash" != "$expected_hash" ]; then
+        log_error "Hysteria2 sha256 校验失败：expected=${expected_hash}, actual=${actual_hash}。"
+        rm -f "$asset_filename" "$hashes_filename"
+        return 1
+    fi
+
+    mv "$asset_filename" "$output_dir/hysteria"
+    chmod +x "$output_dir/hysteria"
+    rm -f "$hashes_filename"
+    log_info "Hysteria2 下载、校验并设置可执行权限完成。"
     return 0
 }
 
@@ -190,9 +278,11 @@ usage() {
     echo "用法: $0 [选项] <组件>"
     echo ""
     echo "组件:"
-    echo "  caddy    下载 caddy"
-    echo "  xray     下载 xray-core"
-    echo "  all      下载 caddy 和 xray-core（默认）"
+    echo "  caddy      下载 caddy"
+    echo "  xray       下载 xray-core"
+    echo "  xraycaddy  下载 caddy 和 xray-core（默认）"
+    echo "  hysteria2  下载 Hysteria2"
+    echo "  all        下载 caddy、xray-core 和 Hysteria2"
     echo ""
     echo "选项:"
     echo "  --force  强制重新下载，即使文件已存在"
@@ -204,7 +294,7 @@ usage() {
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        caddy|xray|all)
+        caddy|xray|xraycaddy|hysteria2|all)
             component="$1"
             shift
             ;;
@@ -233,31 +323,30 @@ done
 
 # Set default component if not specified
 if [ -z "$component" ]; then
-    component="all"
+    component="xraycaddy"
 fi
 
 # Execute downloads based on component
 case "$component" in
     caddy)
-        if [ -n "$output_dir" ]; then
-            download_caddy "$force_download" "$output_dir"
-        else
-            download_caddy "$force_download"
-        fi
+        download_caddy "$force_download" "${output_dir:-./app/caddy}"
         ;;
     xray)
-        if [ -n "$output_dir" ]; then
-            download_xray "$force_download" "$output_dir"
-        else
-            download_xray "$force_download"
-        fi
+        download_xray "$force_download" "${output_dir:-./app/xray}"
         ;;
-    all)
-        if [ -n "$output_dir" ]; then
-            log_warning "使用 'all' 组件时，--dir 选项将被忽略。"
-        fi
+    hysteria2)
+        download_hysteria2 "$force_download" "${output_dir:-./app/hysteria}"
+        ;;
+    xraycaddy)
+        [ -n "$output_dir" ] && log_warning "使用 'xraycaddy' 组件时，--dir 选项将被忽略。"
         download_caddy "$force_download"
         download_xray "$force_download"
+        ;;
+    all)
+        [ -n "$output_dir" ] && log_warning "使用 'all' 组件时，--dir 选项将被忽略。"
+        download_caddy "$force_download"
+        download_xray "$force_download"
+        download_hysteria2 "$force_download"
         ;;
 esac
 

@@ -1,0 +1,16 @@
+listen: :${HYSTERIA_PORT}
+
+acme:
+  domains:
+    - ${DOMAIN}
+  email: ${EMAIL}
+
+auth:
+  type: password
+  password: ${HYSTERIA_AUTH_PASSWORD}
+
+masquerade:
+  type: proxy
+  proxy:
+    url: ${HYSTERIA_MASQUERADE_PROXY_URL}
+    rewriteHost: true

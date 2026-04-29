@@ -1,0 +1,9 @@
+server: ${HYSTERIA_CLIENT_SERVER}
+auth: ${HYSTERIA_AUTH_PASSWORD}
+
+tls:
+  sni: ${HYSTERIA_SNI}
+  insecure: ${HYSTERIA_TLS_INSECURE}
+
+socks5:
+  listen: 127.0.0.1:${HYSTERIA_CLIENT_SOCKS5_PORT}
