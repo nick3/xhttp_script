@@ -1,0 +1,16 @@
+Hysteria2 客户端连接信息
+
+服务器: ${DOMAIN}
+端口: ${HYSTERIA_PORT}
+SNI: ${HYSTERIA_SNI}
+认证方式: password
+认证密码: ${HYSTERIA_AUTH_PASSWORD}
+证书模式: ${HYSTERIA_CERT_MODE}
+TLS 验证: ${HYSTERIA_TLS_VERIFY_NOTE}
+端口跳跃: ${HYSTERIA_PORT_HOPPING_STATUS}
+端口跳跃范围: ${HYSTERIA_PORT_HOPPING_RANGE_DISPLAY}
+端口跳跃间隔: ${HYSTERIA_PORT_HOPPING_INTERVAL_DISPLAY}
+客户端配置文件: ${HYSTERIA_CLIENT_CONFIG_PATH}
+Hysteria2 URI: ${HYSTERIA2_URI}
+
+防火墙提醒: 请确认服务器安全组、防火墙和上游网络已放行 UDP/${HYSTERIA_PORT}。如开启端口跳跃，还需放行并转发端口跳跃范围。
