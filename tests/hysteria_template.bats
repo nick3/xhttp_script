@@ -93,12 +93,14 @@ setup() {
         HYSTERIA_PORT_HOPPING_STATUS disabled \
         HYSTERIA_PORT_HOPPING_RANGE_DISPLAY N/A \
         HYSTERIA_PORT_HOPPING_INTERVAL_DISPLAY N/A \
+        HYSTERIA_CLIENT_CONFIG_PATH /etc/hysteria/client.yaml \
         HYSTERIA2_URI 'hysteria2://test-password@example.com:8443/?sni=example.com#example.com')
 
     [[ "$rendered" == *"服务器: example.com"* ]]
     [[ "$rendered" == *"端口: 8443"* ]]
     [[ "$rendered" == *"认证密码: test-password"* ]]
     [[ "$rendered" == *"端口跳跃: disabled"* ]]
+    [[ "$rendered" == *"客户端配置文件: /etc/hysteria/client.yaml"* ]]
     [[ "$rendered" == *"Hysteria2 URI: hysteria2://test-password@example.com:8443/?sni=example.com#example.com"* ]]
     [[ "$rendered" == *"UDP/8443"* ]]
 }
@@ -110,5 +112,7 @@ setup() {
     [[ "$unit" == *"After=network-online.target"* ]]
     [[ "$unit" == *"ExecStart=/usr/local/bin/hysteria server --config /etc/hysteria/config.yaml"* ]]
     [[ "$unit" == *"Restart=on-failure"* ]]
+    [[ "$unit" == *"CapabilityBoundingSet=CAP_NET_BIND_SERVICE"* ]]
+    [[ "$unit" != *"CAP_NET_ADMIN"* ]]
     [[ "$unit" == *"WantedBy=multi-user.target"* ]]
 }

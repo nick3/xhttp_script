@@ -58,7 +58,7 @@ wget -O install_remote.sh https://raw.githubusercontent.com/nick3/xhttp_script/m
    - `xraycaddy`：安装 Xray-core 与 Caddy，需要域名、KCP 混淆密码和网站根目录
    - `hysteria2`：安装 Hysteria2，需要域名、证书方式、认证密码、masquerade proxy URL 和 UDP 监听端口
    - `all`：同时安装 Xray-core、Caddy 与 Hysteria2，必须使用现有证书以避免 Caddy 与 Hysteria2 同时申请 ACME 证书
-   - Hysteria2 默认监听 UDP 8443，不能使用 UDP/443；可选端口跳跃范围也不能包含 UDP/443
+   - Hysteria2 默认监听 UDP 8443，监听端口和可选端口跳跃范围都不能包含 UDP/443；`all` profile 下端口跳跃范围还不能包含 Xray KCP 使用的 UDP/2052
 
 2. **修改配置并重启服务**
    - 更新 Xray/Caddy 配置参数（域名、KCP 密码、网站根目录等）

@@ -2,6 +2,7 @@
 
 # 获取脚本所在目录，用于支持xraycaddy快捷命令
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_STATE_PATH="/etc/xray-caddy/install_state.env"
 
 # 检查当前系统是否符合脚本要求，必须为x86_64架构的Linux系统
 if [[ $(uname -m) != "x86_64" ]]; then
@@ -391,24 +392,145 @@ validate_path() {
     fi
 }
 
-systemd_units_ready() {
+systemd_unit_file_exists() {
+    local unit="$1"
+
+    [ -f "/etc/systemd/system/$unit" ] && return 0
+    [ -f "/lib/systemd/system/$unit" ] && return 0
+    [ -f "/usr/lib/systemd/system/$unit" ] && return 0
+
     command -v systemctl >/dev/null 2>&1 \
-        && [ -f "/etc/systemd/system/caddy.service" ] \
-        && [ -f "/etc/systemd/system/xray.service" ]
+        && systemctl list-unit-files "$unit" --no-legend 2>/dev/null | grep -q .
+}
+
+managed_systemd_units() {
+    local units=()
+    local state_components=""
+    local state_hopping="false"
+    local unit
+    local key
+    local value
+
+    if [ -r "$INSTALL_STATE_PATH" ]; then
+        while IFS='=' read -r key value || [ -n "$key" ]; do
+            case "$key" in
+                INSTALLED_COMPONENTS)
+                    [[ "$value" =~ ^[a-z0-9,]+$ ]] && state_components="$value"
+                    ;;
+                HYSTERIA_PORT_HOPPING_ENABLED)
+                    [[ "$value" =~ ^(true|false)$ ]] && state_hopping="$value"
+                    ;;
+            esac
+        done < "$INSTALL_STATE_PATH"
+
+        [[ ",$state_components," == *,caddy,* ]] && units+=("caddy.service")
+        [[ ",$state_components," == *,xray,* ]] && units+=("xray.service")
+        if [[ ",$state_components," == *,hysteria2,* ]]; then
+            units+=("hysteria2.service")
+            [ "$state_hopping" = "true" ] && units+=("hysteria2-port-hopping.service")
+        fi
+    else
+        for unit in caddy.service xray.service hysteria2.service hysteria2-port-hopping.service; do
+            systemd_unit_file_exists "$unit" && units+=("$unit")
+        done
+    fi
+
+    [ "${#units[@]}" -gt 0 ] || return 1
+    printf '%s\n' "${units[@]}"
+}
+
+read_managed_units() {
+    local unit
+
+    MANAGED_SYSTEMD_UNITS=()
+    while IFS= read -r unit; do
+        [ -n "$unit" ] && MANAGED_SYSTEMD_UNITS+=("$unit")
+    done < <(managed_systemd_units || true)
+
+    [ "${#MANAGED_SYSTEMD_UNITS[@]}" -gt 0 ]
+}
+
+systemd_units_ready() {
+    local unit
+
+    command -v systemctl >/dev/null 2>&1 || return 1
+    [ "$#" -gt 0 ] || return 1
+
+    for unit in "$@"; do
+        systemd_unit_file_exists "$unit" || return 1
+    done
 }
 
 manage_services() {
     local action="$1"
-    if systemd_units_ready; then
-        systemctl "$action" caddy.service xray.service
-    else
-        log_warning "未找到 systemd unit，使用 service.sh 手动 fallback。"
-        bash "$SCRIPT_DIR/service.sh" "$action"
+    local units=()
+
+    if read_managed_units; then
+        units=("${MANAGED_SYSTEMD_UNITS[@]}")
     fi
+
+    if [ "${#units[@]}" -gt 0 ] && systemd_units_ready "${units[@]}"; then
+        systemctl "$action" "${units[@]}"
+        return $?
+    fi
+
+    if [ -r "$INSTALL_STATE_PATH" ]; then
+        log_error "未找到完整 systemd unit，无法安全管理已安装 profile。"
+        return 1
+    fi
+
+    log_warning "未找到 systemd unit，使用 service.sh 手动 fallback。"
+    bash "$SCRIPT_DIR/service.sh" "$action"
 }
 
 show_systemd_status() {
-    systemctl status caddy.service xray.service --no-pager || true
+    local units=("$@")
+
+    if [ "${#units[@]}" -eq 0 ]; then
+        read_managed_units || {
+            log_warning "未找到可显示状态的 systemd unit。"
+            return 1
+        }
+        units=("${MANAGED_SYSTEMD_UNITS[@]}")
+    fi
+
+    systemctl status "${units[@]}" --no-pager || true
+}
+
+print_client_config_hint() {
+    local profile="$1"
+
+    if [[ "$profile" == "xraycaddy" || "$profile" == "all" ]]; then
+        echo "Xray 客户端参数: 菜单 6，或查看 /etc/xray/client_config_info.txt"
+    fi
+    if [[ "$profile" == "hysteria2" || "$profile" == "all" ]]; then
+        echo "Hysteria2 客户端参数: 菜单 6，或查看 /etc/hysteria/client_config_info.txt"
+    fi
+}
+
+show_client_config_info() {
+    local shown="false"
+
+    if [ -f "/etc/xray/client_config_info.txt" ]; then
+        echo "Xray 客户端配置参数如下:"
+        echo "----------------------------------------"
+        cat /etc/xray/client_config_info.txt
+        echo "----------------------------------------"
+        shown="true"
+    fi
+
+    if [ -f "/etc/hysteria/client_config_info.txt" ]; then
+        echo "Hysteria2 客户端配置参数如下:"
+        echo "----------------------------------------"
+        cat /etc/hysteria/client_config_info.txt
+        echo "----------------------------------------"
+        shown="true"
+    fi
+
+    if [ "$shown" = "false" ]; then
+        echo "错误: 无法找到客户端配置信息文件，请先安装服务。"
+        return 1
+    fi
 }
 
 escape_sed_replacement() {
@@ -476,7 +598,7 @@ show_menu() {
             fi
 
             echo "安装已完成，服务已由 systemd 托管并完成健康检查。"
-            echo "客户端参数: xraycaddy -> 6，或查看 /etc/xray/client_config_info.txt"
+            print_client_config_hint "$install_profile"
             read -r -p "按回车键继续..."
             ;;
         2)
@@ -534,7 +656,7 @@ show_menu() {
                     fi
                 fi
                 echo "配置已更新，服务已由 systemd 重启并完成健康检查。"
-                echo "客户端参数: xraycaddy -> 6，或查看 /etc/xray/client_config_info.txt"
+                print_client_config_hint "xraycaddy"
             else
                 echo "操作已取消。"
             fi
@@ -608,18 +730,7 @@ show_menu() {
             ;;
         6)
             echo "正在查看客户端配置参数..."
-            # 检查客户端配置信息文件是否存在
-            if [ ! -f "/etc/xray/client_config_info.txt" ]; then
-                echo "错误: 无法找到客户端配置信息文件，请先安装服务。"
-                read -r -p "按回车键继续..."
-                return
-            fi
-
-            # 显示客户端配置信息
-            echo "客户端配置参数如下:"
-            echo "----------------------------------------"
-            cat /etc/xray/client_config_info.txt
-            echo "----------------------------------------"
+            show_client_config_info
             read -r -p "按回车键继续..."
             ;;
         7)
@@ -685,6 +796,7 @@ show_menu() {
             ;;
         9)
             echo "正在修复 systemd 开机自启服务..."
+            units=()
 
             if ! command -v systemctl &> /dev/null; then
                 echo "错误：systemd 不可用，当前安装闭环仅支持常规 Debian/Ubuntu systemd VPS。"
@@ -692,14 +804,12 @@ show_menu() {
                 return
             fi
 
-            if [ ! -f "/usr/local/bin/caddy" ] || [ ! -f "/usr/local/bin/xray" ]; then
-                echo "错误：Xray 或 Caddy 未安装，请先安装服务。"
-                read -r -p "按回车键继续..."
-                return
+            if read_managed_units; then
+                units=("${MANAGED_SYSTEMD_UNITS[@]}")
             fi
 
-            if ! systemd_units_ready; then
-                echo "错误：未找到 systemd unit，请重新运行安装流程生成并验证服务配置。"
+            if [ "${#units[@]}" -eq 0 ] || ! systemd_units_ready "${units[@]}"; then
+                echo "错误：未找到完整 systemd unit，请重新运行安装流程生成并验证服务配置。"
                 read -r -p "按回车键继续..."
                 return
             fi
@@ -709,23 +819,23 @@ show_menu() {
                 read -r -p "按回车键继续..."
                 return 1
             fi
-            if ! systemctl enable caddy.service xray.service; then
+            if ! systemctl enable "${units[@]}"; then
                 echo "错误：设置开机自启失败，请检查 systemd 状态。"
                 read -r -p "按回车键继续..."
                 return 1
             fi
-            if systemctl restart caddy.service xray.service; then
+            if systemctl restart "${units[@]}"; then
                 echo "服务已设置为开机自启并重新启动。"
             else
                 echo "服务启动失败，请查看 systemd 状态和日志。"
             fi
 
-            show_systemd_status
+            show_systemd_status "${units[@]}"
             echo "你可以使用以下命令管理服务："
-            echo "  启动服务: systemctl start caddy.service xray.service"
-            echo "  停止服务: systemctl stop caddy.service xray.service"
-            echo "  重启服务: systemctl restart caddy.service xray.service"
-            echo "  查看状态: systemctl status caddy.service xray.service"
+            echo "  启动服务: systemctl start ${units[*]}"
+            echo "  停止服务: systemctl stop ${units[*]}"
+            echo "  重启服务: systemctl restart ${units[*]}"
+            echo "  查看状态: systemctl status ${units[*]}"
             read -r -p "按回车键继续..."
             ;;
         10)
@@ -734,24 +844,18 @@ show_menu() {
             confirm=${confirm:-N}
             if [[ $confirm =~ ^[Yy]$ ]]; then
                 # 先停止服务
-                bash "$SCRIPT_DIR/service.sh" stop
+                manage_services stop || bash "$SCRIPT_DIR/service.sh" stop || true
 
                 # 检查并删除systemd服务（如果存在）
                 if command -v systemctl &> /dev/null; then
-                    # 先停止并禁用服务，然后再删除服务文件
-                    if systemctl list-unit-files | grep -q "caddy.service"; then
-                        echo "正在停止并禁用Caddy系统服务..."
-                        systemctl stop caddy.service || true
-                        systemctl disable caddy.service || true
-                        rm -f /etc/systemd/system/caddy.service
-                    fi
-
-                    if systemctl list-unit-files | grep -q "xray.service"; then
-                        echo "正在停止并禁用Xray系统服务..."
-                        systemctl stop xray.service || true
-                        systemctl disable xray.service || true
-                        rm -f /etc/systemd/system/xray.service
-                    fi
+                    for unit in caddy.service xray.service hysteria2.service hysteria2-port-hopping.service; do
+                        if systemctl list-unit-files "$unit" --no-legend 2>/dev/null | grep -q .; then
+                            echo "正在停止并禁用 $unit ..."
+                            systemctl stop "$unit" || true
+                            systemctl disable "$unit" || true
+                            rm -f "/etc/systemd/system/$unit"
+                        fi
+                    done
 
                     # 重新加载systemd配置
                     systemctl daemon-reload
@@ -762,16 +866,21 @@ show_menu() {
                 echo "删除程序文件..."
                 rm -f /usr/local/bin/xray
                 rm -f /usr/local/bin/caddy
+                rm -f /usr/local/bin/hysteria
+                rm -f /usr/local/bin/hysteria2-port-hopping-rules
 
                 # 删除配置文件
                 echo "删除配置文件..."
                 rm -rf /etc/xray
                 rm -rf /etc/caddy
+                rm -rf /etc/hysteria
+                rm -rf /etc/xray-caddy
 
                 # 删除日志文件
                 echo "删除日志文件..."
                 rm -f /var/log/xray.log
                 rm -f /var/log/caddy.log
+                rm -rf /var/log/hysteria
 
                 # 删除PID文件
                 echo "删除PID文件..."

@@ -201,7 +201,10 @@ download_hysteria2() {
     fi
 
     while read -r hash_value hash_path _; do
-        if [ "$hash_path" = "build/${asset_filename}" ] || [ "$hash_path" = "$asset_filename" ]; then
+        hash_path="${hash_path#\*}"
+        hash_path="${hash_path#./}"
+        hash_path="${hash_path#build/}"
+        if [ "$hash_path" = "$asset_filename" ]; then
             expected_hash="$hash_value"
             break
         fi

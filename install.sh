@@ -997,12 +997,35 @@ hysteria2_port_hopping_interval_display() {
     hysteria2_port_hopping_field "$HYSTERIA_PORT_HOPPING_INTERVAL"
 }
 
+url_encode() {
+    local input="$1"
+    local LC_ALL=C
+    local i
+    local char
+
+    for ((i = 0; i < ${#input}; i++)); do
+        char="${input:i:1}"
+        case "$char" in
+            [a-zA-Z0-9.~_-]) printf '%s' "$char" ;;
+            *) printf '%%%02X' "'$char" ;;
+        esac
+    done
+}
+
 build_hysteria2_uri() {
+    local encoded_auth
+    local encoded_sni
+    local encoded_name
+
+    encoded_auth=$(url_encode "$HYSTERIA_AUTH_PASSWORD")
+    encoded_sni=$(url_encode "$HYSTERIA_SNI")
+    encoded_name=$(url_encode "$DOMAIN")
+
     printf 'hysteria2://%s@%s/?sni=%s#%s\n' \
-        "$HYSTERIA_AUTH_PASSWORD" \
+        "$encoded_auth" \
         "$(hysteria2_client_server)" \
-        "$HYSTERIA_SNI" \
-        "$DOMAIN"
+        "$encoded_sni" \
+        "$encoded_name"
 }
 
 render_hysteria2_templates() {
@@ -1052,6 +1075,7 @@ render_hysteria2_templates() {
         HYSTERIA_PORT_HOPPING_STATUS "$(hysteria2_port_hopping_status)" \
         HYSTERIA_PORT_HOPPING_RANGE_DISPLAY "$(hysteria2_port_hopping_range_display)" \
         HYSTERIA_PORT_HOPPING_INTERVAL_DISPLAY "$(hysteria2_port_hopping_interval_display)" \
+        HYSTERIA_CLIENT_CONFIG_PATH "$output_dir/client.yaml" \
         HYSTERIA2_URI "$uri"
 
     chmod 600 "$output_dir/config.yaml" "$output_dir/client.yaml" "$output_dir/client_config_info.txt"
@@ -1806,7 +1830,7 @@ log_info "重要提醒:"
 log_info "  - 所有敏感配置信息已保存到 /etc/xray 或 /etc/hysteria 目录"
 log_info "  - 请妥善保管配置文件，避免泄露敏感信息"
 log_info "  - 可使用 'xraycaddy' 查看完整配置信息"
-log_info "---------------------------------------------------------------------"}.TODO? Wait Edit new_string includes no emoji? It removed emoji. But maybe syntax? I accidentally included stray? Let's verify JSON string valid. It has no closing quote? Let's see tool call failed? It did not show result. Actually I inserted huge string with Chinese but at end I included `}`? Let's wait. It may have failed? The message maybe malformed. It hasn't returned? Hmm output not shown. The call maybe still? I see final `}.TODO?` in analysis due my compose? Actually in commentary to functions.Edit, JSON ended after new_string... It includes
+log_info "---------------------------------------------------------------------"
 
 return 0
 }

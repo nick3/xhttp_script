@@ -18,6 +18,15 @@ setup() {
     [[ "$calls" == *"apernet/hysteria|hashes.txt"* ]]
 }
 
+@test "hysteria2 accepts sha256sum binary marker path" {
+    write_fake_dra star-hash
+
+    run run_download hysteria2 --dir "$TEST_WORKDIR/out"
+
+    [ "$status" -eq 0 ]
+    [ -x "$TEST_WORKDIR/out/hysteria" ]
+}
+
 @test "hysteria2 dra failure fails closed" {
     write_fake_dra fail
 

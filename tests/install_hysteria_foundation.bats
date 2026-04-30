@@ -33,7 +33,22 @@ redact_sample() {
     [[ "$(<"$TEST_WORKDIR/hysteria/config.yaml")" == *"cert: /etc/ssl/example/fullchain.pem"* ]]
     [[ "$(<"$TEST_WORKDIR/hysteria/config.yaml")" == *"url: https://example.org"* ]]
     [[ "$(<"$TEST_WORKDIR/hysteria/client.yaml")" == *"listen: 127.0.0.1:1081"* ]]
+    [[ "$(<"$TEST_WORKDIR/hysteria/client_config_info.txt")" == *"客户端配置文件: $TEST_WORKDIR/hysteria/client.yaml"* ]]
     [[ "$(<"$TEST_WORKDIR/hysteria/client_config_info.txt")" == *"hysteria2://test-password@example.com:8443/?sni=example.com#example.com"* ]]
+}
+
+@test "build_hysteria2_uri encodes reserved characters" {
+    parse_args \
+        --profile hysteria2 \
+        --domain example.com \
+        --cert-mode existing \
+        --cert-path /etc/ssl/example/fullchain.pem \
+        --key-path /etc/ssl/example/privkey.pem \
+        --hysteria-port 8443 \
+        --hysteria-auth 'p@ss word#1' \
+        --hysteria-masquerade-proxy-url https://example.org || return 1
+
+    [ "$(build_hysteria2_uri)" = 'hysteria2://p%40ss%20word%231@example.com:8443/?sni=example.com#example.com' ]
 }
 
 @test "render_hysteria2_templates writes port hopping client config" {
@@ -56,6 +71,7 @@ redact_sample() {
     [[ "$(<"$TEST_WORKDIR/hysteria/client.yaml")" == *"server: example.com:20000-40000"* ]]
     [[ "$(<"$TEST_WORKDIR/hysteria/client.yaml")" == *"hopInterval: 20s"* ]]
     [[ "$(<"$TEST_WORKDIR/hysteria/client_config_info.txt")" == *"端口跳跃: enabled"* ]]
+    [[ "$(<"$TEST_WORKDIR/hysteria/client_config_info.txt")" == *"客户端配置文件: $TEST_WORKDIR/hysteria/client.yaml"* ]]
     [[ "$(<"$TEST_WORKDIR/hysteria/client_config_info.txt")" == *"hysteria2://test-password@example.com:20000-40000/?sni=example.com#example.com"* ]]
 }
 

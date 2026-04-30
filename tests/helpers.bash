@@ -40,6 +40,9 @@ case "$mode:$asset" in
     hash-mismatch:hashes.txt)
         printf '0000000000000000000000000000000000000000000000000000000000000000  build/hysteria-linux-amd64\n' > hashes.txt
         ;;
+    star-hash:hashes.txt)
+        printf 'd744f9fa5d5cc4d8cee0e58ea481ad20c1c42ff2243805f1e18886bd9c406802 *build/hysteria-linux-amd64\n' > hashes.txt
+        ;;
     *:hashes.txt)
         # sha256 of printf 'fake-hysteria-binary'
         printf 'd744f9fa5d5cc4d8cee0e58ea481ad20c1c42ff2243805f1e18886bd9c406802  build/hysteria-linux-amd64\n' > hashes.txt
